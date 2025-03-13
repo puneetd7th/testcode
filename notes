@@ -1,0 +1,174 @@
+Generate Certificates for SAML Encryption
+Since we are using pre-shared keys, generate the required key pairs.
+
+📌 Generate the SP Key Pair
+Run the following command to create a private key and certificate for the SP:
+
+bash
+Copy
+Edit
+openssl req -x509 -newkey rsa:4096 -keyout sp_private.key -out sp_cert.pem -days 365 -nodes
+Convert the private key to PKCS8 format for Java:
+
+bash
+Copy
+Edit
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in sp_private.key -out sp_private_pkcs8.key
+Now, you have:
+
+sp_private.key → SP private key
+sp_cert.pem → SP public certificate (used by the IdP for assertion encryption)
+2️⃣ Set Up PingFederate as the IdP
+Login to PingFederate Admin Console
+
+URL: https://localhost:9999/pingfederate
+Admin Credentials:
+Username: Administrator
+Password: <your_password>
+Go to "Federation" → "IdP Configuration"
+
+Create a new SP Connection
+
+Name: SpringBootSP
+Manually configure the connection (No metadata needed)
+Assertion Encryption Settings:
+Select Encrypt Assertions
+Upload sp_cert.pem as the SP's encryption certificate
+Configure SSO URL
+
+Assertion Consumer Service (ACS) URL:
+bash
+Copy
+Edit
+http://localhost:8080/login/saml2/sso
+This is where the SP receives the SAML response.
+Enable the IdP-Initiated SSO URL
+
+bash
+Copy
+Edit
+https://localhost:9999/idp/startSSO.ping?PartnerSpId=SpringBootSP
+3️⃣ Create Spring Boot SAML2 SP
+We will create a Spring Boot 3 application that acts as a SAML2 SP.
+
+📌 Add Dependencies (Maven)
+xml
+Copy
+Edit
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-web</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-security</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.springframework.security</groupId>
+    <artifactId>spring-security-saml2-service-provider</artifactId>
+</dependency>
+📌 Configure application.yml
+yaml
+Copy
+Edit
+server:
+  port: 8080
+
+spring:
+  security:
+    saml2:
+      relyingparty:
+        registration:
+          my-sp:
+            entity-id: "http://localhost:8080/saml2/sp"
+            assertingparty:
+              metadata-uri: "https://localhost:9999/pf/federation/metadata/idp"
+            decryption:
+              credentials:
+                - private-key-location: "classpath:sp_private_pkcs8.key"
+                  certificate-location: "classpath:sp_cert.pem"
+            signing:
+              credentials:
+                - private-key-location: "classpath:sp_private_pkcs8.key"
+                  certificate-location: "classpath:sp_cert.pem"
+📌 Configure Spring Security
+Create SecurityConfig.java:
+
+java
+Copy
+Edit
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.saml2.provider.service.registration.RelyingPartyRegistrationRepository;
+
+@Configuration
+public class SecurityConfig {
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http, 
+            RelyingPartyRegistrationRepository relyingPartyRegistrationRepository) throws Exception {
+        
+        http.authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
+            .saml2Login(saml2 -> saml2.defaultSuccessUrl("/home"));
+
+        return http.build();
+    }
+}
+📌 Create a Simple Controller
+java
+Copy
+Edit
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.saml2.provider.service.authentication.Saml2AuthenticatedPrincipal;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class HomeController {
+
+    @GetMapping("/home")
+    public String home(@AuthenticationPrincipal Saml2AuthenticatedPrincipal principal) {
+        return "Hello " + principal.getName() + "! Your email is: " + principal.getAttribute("email");
+    }
+}
+4️⃣ Start and Test the SAML Flow
+🔹 Start the Spring Boot SP
+bash
+Copy
+Edit
+mvn spring-boot:run
+🔹 Perform SSO
+Open PingFederate IdP SSO URL:
+bash
+Copy
+Edit
+https://localhost:9999/idp/startSSO.ping?PartnerSpId=SpringBootSP
+Login with your test credentials.
+You will be redirected to http://localhost:8080/home with your SAML attributes.
+📌 Verifying Encrypted Assertions
+To manually check the encrypted assertion:
+
+Capture the SAML Response
+
+Open DevTools (F12) → Go to Network → Find the POST request to /login/saml2/sso
+Copy the SAMLResponse (Base64 encoded).
+Decode it
+
+bash
+Copy
+Edit
+echo "BASE64_SAML_RESPONSE" | base64 -d > saml_response.xml
+Extract Encrypted Assertion
+
+bash
+Copy
+Edit
+xmllint --format saml_response.xml | grep "<EncryptedAssertion>"
+🎯 Summary
+✅ PingFederate acts as the IdP
+✅ Spring Boot handles SAML authentication
+✅ Assertions are encrypted using SP’s public key
+✅ SP decrypts the assertion using its private key
+✅ User is authenticated and redirected to /home
+

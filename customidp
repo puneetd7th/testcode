@@ -394,17 +394,29 @@ import java.security.PublicKey;
 
 public class SamlEncrypter {
 
-    public static Assertion encryptAssertion(Assertion assertion, PublicKey encryptionKey) throws EncryptionException {
-        BasicCredential encryptionCredential = new BasicCredential(encryptionKey, null);
-        Encrypter encrypter = new Encrypter(new DataEncryptionParameters(encryptionCredential), new KeyEncryptionParameters(encryptionCredential));
+    BasicCredential encryptionCredential = new BasicCredential(encryptionKey, null);
+
+        // Configure Encryption Parameters
+        DataEncryptionParameters dataEncParams = new DataEncryptionParameters();
+        dataEncParams.setAlgorithm(EncryptionConstants.ALGO_ID_BLOCKCIPHER_AES256);
+        
+        KeyEncryptionParameters keyEncParams = new KeyEncryptionParameters();
+        keyEncParams.setAlgorithm(EncryptionConstants.ALGO_ID_KEYTRANSPORT_RSAOAEP);
+        keyEncParams.setCredential(encryptionCredential);
+        keyEncParams.setKeyInfoGenerator(new StaticKeyInfoGenerator(encryptionCredential));
+
+        // Encrypt Assertion
+        Encrypter encrypter = new Encrypter(dataEncParams, keyEncParams);
         return encrypter.encrypt(assertion);
     }
 
-    public static Assertion decryptAssertion(XMLObject encryptedAssertion, PrivateKey decryptionKey) throws DecryptionException {
+    public static Assertion decryptAssertion(EncryptedAssertion encryptedAssertion, PrivateKey decryptionKey) throws DecryptionException {
         BasicCredential decryptionCredential = new BasicCredential(null, decryptionKey);
+        
         Decrypter decrypter = new Decrypter(null, new StaticKeyInfoGenerator(decryptionCredential), null);
         return (Assertion) decrypter.decryptData(encryptedAssertion);
     }
+}
 }
 5️⃣ Steps to Run
 Step 1: Generate RSA Keys

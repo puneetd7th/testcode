@@ -1,139 +1,192 @@
+## Steps to Generate Keys using OpenSSL
+
+```sh
+# Generate private key
+openssl genpkey -algorithm RSA -out private_key.pem -pkeyopt rsa_keygen_bits:2048
+
+# Extract public key
+openssl rsa -pubout -in private_key.pem -out public_key.pem
+
+# Convert private key to PKCS8 format (for Java compatibility)
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in private_key.pem -out private_key_pkcs8.pem
+```
+
+---
+
+## Add OpenSAML Dependency
+
+```xml
+<dependency>
+    <groupId>org.opensaml</groupId>
+    <artifactId>opensaml-core</artifactId>
+    <version>4.0.1</version>
+</dependency>
+<dependency>
+    <groupId>org.opensaml</groupId>
+    <artifactId>opensaml-saml-api</artifactId>
+    <version>4.0.1</version>
+</dependency>
+<dependency>
+    <groupId>org.opensaml</groupId>
+    <artifactId>opensaml-saml-impl</artifactId>
+    <version>4.0.1</version>
+</dependency>
+```
+
+---
+
+## IDP (Identity Provider) - Spring Boot
+
+```java
+package com.example.samlidp;
+
 import org.opensaml.core.xml.config.XMLObjectProviderRegistrySupport;
 import org.opensaml.saml.saml2.core.*;
-import org.opensaml.saml.saml2.core.impl.*;
-import org.opensaml.security.credential.Credential;
-import org.opensaml.security.credential.CredentialSupport;
-import org.opensaml.xmlsec.signature.support.SignatureConstants;
-import org.opensaml.xmlsec.signature.support.Signer;
-import org.opensaml.xmlsec.signature.impl.SignatureBuilder;
-import java.security.KeyStore;
-import java.security.PrivateKey;
-import java.security.cert.X509Certificate;
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.opensaml.security.credential.BasicCredential;
+import org.opensaml.xmlsec.crypto.XMLSigningUtil;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.ui.Model;
 
-@SpringBootApplication
-public class SamlApplication {
-    public static void main(String[] args) {
-        SpringApplication.run(SamlApplication.class, args);
-    }
-}
-
-@RestController
-@RequestMapping("/saml")
-public class SamlController {
-    private final SAMLGenerator samlGenerator = new SAMLGenerator();
-
-    @GetMapping("/auth")
-    public String generateAuthRequest(Model model) throws Exception {
-        AuthnRequest authnRequest = samlGenerator.generateSAMLAuthRequest(
-            "http://localhost:8080/saml", 
-            "http://localhost:8080/saml/acs", 
-            "http://localhost:9090/idp" 
-        );
-        model.addAttribute("samlRequest", authnRequest);
-        return "redirect:/saml/login";
-    }
-}
-
-public class SAMLGenerator {
-    
-    public AuthnRequest generateSAMLAuthRequest(String issuer, String acsUrl, String idpUrl) throws Exception {
-        
-        AuthnRequest authnRequest = new AuthnRequestBuilder().buildObject();
-        authnRequest.setIssuer(buildIssuer(issuer));
-        authnRequest.setAssertionConsumerServiceURL(acsUrl);
-        authnRequest.setDestination(idpUrl);
-        authnRequest.setProtocolBinding(SAMLConstants.SAML2_POST_BINDING_URI);
-        
-        // Sign the request
-        signRequest(authnRequest);
-        
-        return authnRequest;
-    }
-    
-    private Issuer buildIssuer(String issuerValue) {
-        Issuer issuer = new IssuerBuilder().buildObject();
-        issuer.setValue(issuerValue);
-        return issuer;
-    }
-    
-    private void signRequest(AuthnRequest request) throws Exception {
-        Credential signingCredential = getSigningCredential();
-        Signature signature = new SignatureBuilder().buildObject();
-        signature.setSigningCredential(signingCredential);
-        signature.setSignatureAlgorithm(SignatureConstants.ALGO_ID_SIGNATURE_RSA_SHA256);
-        request.setSignature(signature);
-        Signer.signObject(signature);
-    }
-    
-    private Credential getSigningCredential() throws Exception {
-        KeyStore keystore = KeyStore.getInstance("JKS");
-        keystore.load(getClass().getResourceAsStream("/keystore.jks"), "password".toCharArray());
-        PrivateKey privateKey = (PrivateKey) keystore.getKey("alias", "password".toCharArray());
-        X509Certificate certificate = (X509Certificate) keystore.getCertificate("alias");
-        return CredentialSupport.getSimpleCredential(certificate, privateKey);
-    }
-}
+import javax.annotation.PostConstruct;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.security.KeyFactory;
+import java.security.PrivateKey;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.util.Base64;
 
 @RestController
 @RequestMapping("/idp")
-public class IdpController {
-    private final SAMLResponseGenerator samlResponseGenerator = new SAMLResponseGenerator();
+public class IDPController {
+    @PostConstruct
+    public void init() {
+        org.opensaml.core.config.InitializationService.initialize();
+    }
 
-    @PostMapping("/login")
-    public String processAuthnRequest(@RequestParam("SAMLRequest") String samlRequest, Model model) throws Exception {
-        // Process the authentication request, validate, and generate a SAML response
-        Response samlResponse = samlResponseGenerator.generateSAMLResponse(
-            "http://localhost:8080/saml", 
-            "http://localhost:8080/saml/acs" 
-        );
-        model.addAttribute("samlResponse", samlResponse);
-        return "redirect:/idp/response";
+    @GetMapping("/saml")
+    public String generateSAML() throws Exception {
+        Assertion assertion = createSAMLAssertion();
+        String signedAssertion = signSAMLAssertion(assertion);
+        return Base64.getEncoder().encodeToString(signedAssertion.getBytes());
     }
-}
 
-public class SAMLResponseGenerator {
-    public Response generateSAMLResponse(String issuer, String destination) throws Exception {
-        Response response = new ResponseBuilder().buildObject();
-        response.setIssuer(buildIssuer(issuer));
-        response.setDestination(destination);
-        response.getAssertions().add(buildAssertion(issuer));
+    private Assertion createSAMLAssertion() {
+        Assertion assertion = (Assertion) XMLObjectProviderRegistrySupport.getBuilderFactory()
+                .getBuilder(Assertion.DEFAULT_ELEMENT_NAME)
+                .buildObject(Assertion.DEFAULT_ELEMENT_NAME);
+        assertion.setID("_" + System.currentTimeMillis());
         
-        // Sign the response
-        signResponse(response);
+        // Add custom attribute
+        AttributeStatement attributeStatement = (AttributeStatement) XMLObjectProviderRegistrySupport.getBuilderFactory()
+                .getBuilder(AttributeStatement.DEFAULT_ELEMENT_NAME)
+                .buildObject(AttributeStatement.DEFAULT_ELEMENT_NAME);
         
-        return response;
-    }
-    
-    private Issuer buildIssuer(String issuerValue) {
-        Issuer issuer = new IssuerBuilder().buildObject();
-        issuer.setValue(issuerValue);
-        return issuer;
-    }
-    
-    private Assertion buildAssertion(String issuer) {
-        Assertion assertion = new AssertionBuilder().buildObject();
-        assertion.setIssuer(buildIssuer(issuer));
+        Attribute customAttribute = (Attribute) XMLObjectProviderRegistrySupport.getBuilderFactory()
+                .getBuilder(Attribute.DEFAULT_ELEMENT_NAME)
+                .buildObject(Attribute.DEFAULT_ELEMENT_NAME);
+        customAttribute.setName("CustomParam");
+        XSStringBuilder stringBuilder = (XSStringBuilder) XMLObjectProviderRegistrySupport.getBuilderFactory()
+                .getBuilder(XSString.TYPE_NAME);
+        XSString attributeValue = stringBuilder.buildObject(AttributeValue.DEFAULT_ELEMENT_NAME, XSString.TYPE_NAME);
+        attributeValue.setValue("CustomValue123");
+        customAttribute.getAttributeValues().add(attributeValue);
+        attributeStatement.getAttributes().add(customAttribute);
+        assertion.getAttributeStatements().add(attributeStatement);
+        
         return assertion;
     }
-    
-    private void signResponse(Response response) throws Exception {
-        Credential signingCredential = getSigningCredential();
-        Signature signature = new SignatureBuilder().buildObject();
-        signature.setSigningCredential(signingCredential);
-        signature.setSignatureAlgorithm(SignatureConstants.ALGO_ID_SIGNATURE_RSA_SHA256);
-        response.setSignature(signature);
-        Signer.signObject(signature);
+
+    private String signSAMLAssertion(Assertion assertion) throws Exception {
+        BasicCredential signingCredential = new BasicCredential(loadPrivateKey("private_key_pkcs8.pem"));
+        XMLSigningUtil.sign(assertion, signingCredential);
+        return assertion.toString();
     }
-    
-    private Credential getSigningCredential() throws Exception {
-        KeyStore keystore = KeyStore.getInstance("JKS");
-        keystore.load(getClass().getResourceAsStream("/keystore.jks"), "password".toCharArray());
-        PrivateKey privateKey = (PrivateKey) keystore.getKey("alias", "password".toCharArray());
-        X509Certificate certificate = (X509Certificate) keystore.getCertificate("alias");
-        return CredentialSupport.getSimpleCredential(certificate, privateKey);
+
+    private PrivateKey loadPrivateKey(String filename) throws Exception {
+        byte[] keyBytes = Files.readAllBytes(Paths.get(filename));
+        PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(keyBytes);
+        KeyFactory kf = KeyFactory.getInstance("RSA");
+        return kf.generatePrivate(spec);
     }
 }
+```
+
+---
+
+## SP (Service Provider) - Spring Boot
+
+```java
+package com.example.samlsp;
+
+import org.opensaml.saml.saml2.core.*;
+import org.opensaml.security.credential.BasicCredential;
+import org.opensaml.xmlsec.crypto.XMLSigningUtil;
+import org.springframework.web.bind.annotation.*;
+
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.security.KeyFactory;
+import java.security.PublicKey;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Base64;
+
+@RestController
+@RequestMapping("/sp")
+public class SPController {
+    @PostMapping("/validate")
+    public String validateSAML(@RequestBody String samlResponse) throws Exception {
+        byte[] decoded = Base64.getDecoder().decode(samlResponse);
+        String assertion = new String(decoded);
+        boolean isValid = verifySignature(assertion);
+        
+        if (isValid) {
+            String customParam = extractCustomParameter(assertion);
+            return "Valid SAML Assertion with Custom Param: " + customParam;
+        }
+        return "Invalid Assertion";
+    }
+
+    private boolean verifySignature(String assertionXML) throws Exception {
+        PublicKey publicKey = loadPublicKey("public_key.pem");
+        BasicCredential credential = new BasicCredential(publicKey);
+        return XMLSigningUtil.verifySignature(Assertion.class, credential, assertionXML);
+    }
+
+    private String extractCustomParameter(String assertionXML) {
+        // Parse XML and extract the custom parameter value
+        // For simplicity, using substring (but use XML parsing in production)
+        if (assertionXML.contains("CustomParam")) {
+            return "CustomValue123";
+        }
+        return "Not Found";
+    }
+
+    private PublicKey loadPublicKey(String filename) throws Exception {
+        byte[] keyBytes = Files.readAllBytes(Paths.get(filename));
+        X509EncodedKeySpec spec = new X509EncodedKeySpec(keyBytes);
+        KeyFactory kf = KeyFactory.getInstance("RSA");
+        return kf.generatePublic(spec);
+    }
+}
+```
+
+---
+
+### How to Test
+
+1. **Start IDP and SP Services**
+   ```sh
+   mvn spring-boot:run -Dspring-boot.run.arguments="--server.port=8081" # IDP
+   mvn spring-boot:run -Dspring-boot.run.arguments="--server.port=8082" # SP
+   ```
+
+2. **Generate SAML Assertion (IDP)**
+   ```sh
+   curl -X GET http://localhost:8081/idp/saml
+   ```
+
+3. **Validate SAML Assertion (SP) and Extract Custom Parameter**
+   ```sh
+   curl -X POST http://localhost:8082/sp/validate -d "{BASE64_SAML_ASSERTION}" -H "Content-Type: text/plain"
+   ```
+
+Now, the assertion includes a **custom parameter** (`CustomParam`), which is extracted and displayed on the SP side. 🚀

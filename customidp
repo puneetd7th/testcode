@@ -1,4 +1,6 @@
- public EncryptedData encryptAssertion(Assertion assertion) throws Exception {
+
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in private_key.pem -out private_key_pkcs8.pem
+public EncryptedData encryptAssertion(Assertion assertion) throws Exception {
         BasicCredential credential = new BasicCredential(publicKey, null);
         DataEncryptionParameters dataEncParams = new DataEncryptionParameters();
         dataEncParams.setAlgorithm(SignatureConstants.ALGO_ID_BLOCKCIPHER_AES256);

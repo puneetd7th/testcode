@@ -1,0 +1,175 @@
+Steps to Set Up SAML Federation
+1. Configure Ping Identity as IdP
+Create a new SAML Application in PingFederate.
+Define the SP Metadata provided by your Spring Boot app.
+Configure the Assertion Attributes.
+Configure the Signing Certificate & Encryption Key.
+Configure SAML Bindings (typically, HTTP-Redirect for SSO requests and HTTP-POST for responses).
+Enable Single Sign-On (SSO).
+Export the IdP Metadata XML.
+2. Configure the Spring Boot Application as SP
+Use Spring Security SAML to configure the application as an SP.
+Import the IdP's Public Key to verify the SAML assertion.
+Configure SP Metadata and provide it to the IdP.
+Implement SAML Response Processing.
+Spring Boot Application Code
+We'll use Spring Security SAML to integrate the SP.
+
+Step 1: Add Dependencies
+In pom.xml, add the required dependencies:
+
+xml
+Copy
+Edit
+<dependencies>
+    <!-- Spring Boot Web -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+
+    <!-- Spring Boot Security -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
+
+    <!-- Spring Security SAML2 -->
+    <dependency>
+        <groupId>org.springframework.security</groupId>
+        <artifactId>spring-security-saml2-service-provider</artifactId>
+    </dependency>
+
+    <!-- XML Processing -->
+    <dependency>
+        <groupId>org.apache.santuario</groupId>
+        <artifactId>xmlsec</artifactId>
+    </dependency>
+</dependencies>
+Step 2: Configure SAML in application.yml
+Modify src/main/resources/application.yml:
+
+yaml
+Copy
+Edit
+spring:
+  security:
+    saml2:
+      relyingparty:
+        registration:
+          pingidp:
+            identityprovider:
+              entity-id: "https://pingidp.com/idp"
+              verification.credentials:
+                - certificate-location: "classpath:pingidp-public-cert.pem"
+              single-sign-on-service.location: "https://pingidp.com/idp/sso"
+              single-logout-service.location: "https://pingidp.com/idp/slo"
+            assertingparty:
+              entity-id: "http://localhost:8080/saml2/service-provider-metadata"
+              signing.credentials:
+                - private-key-location: "classpath:sp-private-key.pem"
+                  certificate-location: "classpath:sp-public-cert.pem"
+Step 3: Configure Security (Java Config)
+Create SecurityConfig.java:
+
+java
+Copy
+Edit
+package com.example.saml;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.saml2.provider.service.authentication.Saml2AuthenticationToken;
+import org.springframework.security.web.SecurityFilterChain;
+
+@Configuration
+public class SecurityConfig {
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http
+            .authorizeHttpRequests(authorize -> authorize
+                .anyRequest().authenticated()
+            )
+            .saml2Login()
+            .saml2Logout();
+        return http.build();
+    }
+}
+Step 4: Generate SP Metadata
+To get the SP metadata, run the application and visit:
+➡️ http://localhost:8080/saml2/service-provider-metadata
+
+Copy this metadata and upload it to Ping Identity.
+
+Step 5: Create Controller to Display Assertion Data
+Create SAMLController.java:
+
+java
+Copy
+Edit
+package com.example.saml;
+
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.saml2.provider.service.authentication.Saml2AuthenticatedPrincipal;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.Map;
+
+@RestController
+public class SAMLController {
+
+    @GetMapping("/user")
+    public Map<String, Object> userDetails(@AuthenticationPrincipal Saml2AuthenticatedPrincipal principal) {
+        return principal.getAttributes();
+    }
+}
+Step 6: Create Logout Controller
+Create LogoutController.java:
+
+java
+Copy
+Edit
+package com.example.saml;
+
+import org.springframework.security.web.authentication.logout.SecurityContextLogoutHandler;
+import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.GetMapping;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
+@Controller
+public class LogoutController {
+
+    @GetMapping("/logout")
+    public String logout(HttpServletRequest request, HttpServletResponse response) {
+        new SecurityContextLogoutHandler().logout(request, response, null);
+        return "redirect:/";
+    }
+}
+Step 7: Place Certificates in src/main/resources
+Ping Identity’s Public Key (pingidp-public-cert.pem).
+SP’s Public & Private Key (sp-public-cert.pem, sp-private-key.pem).
+Step 8: Start the Application
+Run the Spring Boot application:
+
+bash
+Copy
+Edit
+mvn spring-boot:run
+How It Works
+User clicks "Federate" in the SP → Redirected to Ping Identity Login Page.
+User logs in on IdP → Ping Identity sends SAML Assertion to SP.
+SP verifies assertion signature & decrypts it using Ping Identity’s public key.
+Extracts user attributes and displays the requested page.
+Testing the Setup
+Start the SP (localhost:8080).
+Visit /saml2/authenticate/pingidp → Redirects to IdP.
+Log in using Ping Identity.
+Visit /user to see assertion attributes.
+Visit /logout to initiate Single Logout.
+Conclusion
+You've successfully created a SAML Federation using Ping Identity as IdP and Spring Boot as SP. 🎉 Let me know if you need further refinements! 🚀

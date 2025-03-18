@@ -1,3 +1,23 @@
+public EncryptedData encryptAssertion(Assertion assertion) throws Exception {
+        BasicCredential credential = new BasicCredential(publicKey, null);
+        EncryptionParameters encryptionParameters = new EncryptionParameters();
+        encryptionParameters.setEncryptionCredential(credential);
+        encryptionParameters.setAlgorithm("http://www.w3.org/2001/04/xmlenc#aes256-cbc");
+        
+        return EncryptionSupport.encryptData(assertion.getDOM(), encryptionParameters);
+    }
+
+    public Assertion decryptAssertion(EncryptedData encryptedData) throws Exception {
+        BasicCredential credential = new BasicCredential(null, privateKey);
+        StaticKeyInfoCredentialResolver keyInfoCredentialResolver = new StaticKeyInfoCredentialResolver(credential);
+        
+        DecryptionParameters decryptionParameters = new DecryptionParameters();
+        decryptionParameters.setCredentialResolver(keyInfoCredentialResolver);
+        
+        return (Assertion) DecryptionSupport.decryptData(encryptedData, decryptionParameters);
+    }
+
+
 Here’s the complete end-to-end Spring Boot implementation for SAML Federation with:
 
 ✅ Identity Provider (IdP):

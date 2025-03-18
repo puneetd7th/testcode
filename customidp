@@ -1,10 +1,17 @@
-public EncryptedData encryptAssertion(Assertion assertion) throws Exception {
+ public EncryptedData encryptAssertion(Assertion assertion) throws Exception {
         BasicCredential credential = new BasicCredential(publicKey, null);
-        EncryptionParameters encryptionParameters = new EncryptionParameters();
-        encryptionParameters.setEncryptionCredential(credential);
-        encryptionParameters.setAlgorithm("http://www.w3.org/2001/04/xmlenc#aes256-cbc");
+        DataEncryptionParameters dataEncParams = new DataEncryptionParameters();
+        dataEncParams.setAlgorithm(SignatureConstants.ALGO_ID_BLOCKCIPHER_AES256);
+
+        KeyEncryptionParameters keyEncParams = new KeyEncryptionParameters();
+        keyEncParams.setEncryptionCredential(credential);
+        keyEncParams.setAlgorithm(SignatureConstants.ALGO_ID_KEYTRANSPORT_RSAOAEP);
+
+        Encrypter encrypter = new Encrypter(dataEncParams, keyEncParams);
+        encrypter.setKeyPlacement(Encrypter.KeyPlacement.PEER);
         
-        return EncryptionSupport.encryptData(assertion.getDOM(), encryptionParameters);
+        Element encryptedElement = encrypter.encryptElement(assertion.getDOM());
+        return (EncryptedData) encryptedElement;
     }
 
     public Assertion decryptAssertion(EncryptedData encryptedData) throws Exception {
@@ -14,7 +21,9 @@ public EncryptedData encryptAssertion(Assertion assertion) throws Exception {
         DecryptionParameters decryptionParameters = new DecryptionParameters();
         decryptionParameters.setCredentialResolver(keyInfoCredentialResolver);
         
-        return (Assertion) DecryptionSupport.decryptData(encryptedData, decryptionParameters);
+        Decrypter decrypter = new Decrypter(decryptionParameters);
+        
+        return (Assertion) decrypter.decryptData(encryptedData);
     }
 
 

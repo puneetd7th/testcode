@@ -394,27 +394,36 @@ import java.security.PublicKey;
 
 public class SamlEncrypter {
 
-    BasicCredential encryptionCredential = new BasicCredential(encryptionKey, null);
-
-        // Configure Encryption Parameters
+    public static EncryptedAssertion encryptAssertion(Assertion assertion, PublicKey encryptionKey) throws EncryptionException {
+        // Create Encryption Credential
+        BasicCredential encryptionCredential = new BasicCredential(encryptionKey, null);
+        
+        // Set up KeyInfo Generator
+        KeyInfoGeneratorFactory keyInfoGeneratorFactory = new BasicKeyInfoGeneratorFactory();
+        KeyInfoGenerator keyInfoGenerator = keyInfoGeneratorFactory.newInstance();
+        
+        // Configure Data Encryption (AES-256)
         DataEncryptionParameters dataEncParams = new DataEncryptionParameters();
         dataEncParams.setAlgorithm(EncryptionConstants.ALGO_ID_BLOCKCIPHER_AES256);
         
+        // Configure Key Encryption (RSA-OAEP)
         KeyEncryptionParameters keyEncParams = new KeyEncryptionParameters();
         keyEncParams.setAlgorithm(EncryptionConstants.ALGO_ID_KEYTRANSPORT_RSAOAEP);
-        keyEncParams.setCredential(encryptionCredential);
-        keyEncParams.setKeyInfoGenerator(new StaticKeyInfoGenerator(encryptionCredential));
+        keyEncParams.setEncryptionCredential(encryptionCredential);
+        keyEncParams.setKeyInfoGenerator(keyInfoGenerator);
 
         // Encrypt Assertion
         Encrypter encrypter = new Encrypter(dataEncParams, keyEncParams);
+        encrypter.setKeyPlacement(Encrypter.KeyPlacement.INLINE); // Embed KeyInfo in XML
         return encrypter.encrypt(assertion);
     }
 
     public static Assertion decryptAssertion(EncryptedAssertion encryptedAssertion, PrivateKey decryptionKey) throws DecryptionException {
         BasicCredential decryptionCredential = new BasicCredential(null, decryptionKey);
         
+        // Create Decrypter
         Decrypter decrypter = new Decrypter(null, new StaticKeyInfoGenerator(decryptionCredential), null);
-        return (Assertion) decrypter.decryptData(encryptedAssertion);
+        return decrypter.decrypt(encryptedAssertion);
     }
 }
 }

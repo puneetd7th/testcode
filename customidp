@@ -1,0 +1,139 @@
+import org.opensaml.core.xml.config.XMLObjectProviderRegistrySupport;
+import org.opensaml.saml.saml2.core.*;
+import org.opensaml.saml.saml2.core.impl.*;
+import org.opensaml.security.credential.Credential;
+import org.opensaml.security.credential.CredentialSupport;
+import org.opensaml.xmlsec.signature.support.SignatureConstants;
+import org.opensaml.xmlsec.signature.support.Signer;
+import org.opensaml.xmlsec.signature.impl.SignatureBuilder;
+import java.security.KeyStore;
+import java.security.PrivateKey;
+import java.security.cert.X509Certificate;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.ui.Model;
+
+@SpringBootApplication
+public class SamlApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(SamlApplication.class, args);
+    }
+}
+
+@RestController
+@RequestMapping("/saml")
+public class SamlController {
+    private final SAMLGenerator samlGenerator = new SAMLGenerator();
+
+    @GetMapping("/auth")
+    public String generateAuthRequest(Model model) throws Exception {
+        AuthnRequest authnRequest = samlGenerator.generateSAMLAuthRequest(
+            "http://localhost:8080/saml", 
+            "http://localhost:8080/saml/acs", 
+            "http://localhost:9090/idp" 
+        );
+        model.addAttribute("samlRequest", authnRequest);
+        return "redirect:/saml/login";
+    }
+}
+
+public class SAMLGenerator {
+    
+    public AuthnRequest generateSAMLAuthRequest(String issuer, String acsUrl, String idpUrl) throws Exception {
+        
+        AuthnRequest authnRequest = new AuthnRequestBuilder().buildObject();
+        authnRequest.setIssuer(buildIssuer(issuer));
+        authnRequest.setAssertionConsumerServiceURL(acsUrl);
+        authnRequest.setDestination(idpUrl);
+        authnRequest.setProtocolBinding(SAMLConstants.SAML2_POST_BINDING_URI);
+        
+        // Sign the request
+        signRequest(authnRequest);
+        
+        return authnRequest;
+    }
+    
+    private Issuer buildIssuer(String issuerValue) {
+        Issuer issuer = new IssuerBuilder().buildObject();
+        issuer.setValue(issuerValue);
+        return issuer;
+    }
+    
+    private void signRequest(AuthnRequest request) throws Exception {
+        Credential signingCredential = getSigningCredential();
+        Signature signature = new SignatureBuilder().buildObject();
+        signature.setSigningCredential(signingCredential);
+        signature.setSignatureAlgorithm(SignatureConstants.ALGO_ID_SIGNATURE_RSA_SHA256);
+        request.setSignature(signature);
+        Signer.signObject(signature);
+    }
+    
+    private Credential getSigningCredential() throws Exception {
+        KeyStore keystore = KeyStore.getInstance("JKS");
+        keystore.load(getClass().getResourceAsStream("/keystore.jks"), "password".toCharArray());
+        PrivateKey privateKey = (PrivateKey) keystore.getKey("alias", "password".toCharArray());
+        X509Certificate certificate = (X509Certificate) keystore.getCertificate("alias");
+        return CredentialSupport.getSimpleCredential(certificate, privateKey);
+    }
+}
+
+@RestController
+@RequestMapping("/idp")
+public class IdpController {
+    private final SAMLResponseGenerator samlResponseGenerator = new SAMLResponseGenerator();
+
+    @PostMapping("/login")
+    public String processAuthnRequest(@RequestParam("SAMLRequest") String samlRequest, Model model) throws Exception {
+        // Process the authentication request, validate, and generate a SAML response
+        Response samlResponse = samlResponseGenerator.generateSAMLResponse(
+            "http://localhost:8080/saml", 
+            "http://localhost:8080/saml/acs" 
+        );
+        model.addAttribute("samlResponse", samlResponse);
+        return "redirect:/idp/response";
+    }
+}
+
+public class SAMLResponseGenerator {
+    public Response generateSAMLResponse(String issuer, String destination) throws Exception {
+        Response response = new ResponseBuilder().buildObject();
+        response.setIssuer(buildIssuer(issuer));
+        response.setDestination(destination);
+        response.getAssertions().add(buildAssertion(issuer));
+        
+        // Sign the response
+        signResponse(response);
+        
+        return response;
+    }
+    
+    private Issuer buildIssuer(String issuerValue) {
+        Issuer issuer = new IssuerBuilder().buildObject();
+        issuer.setValue(issuerValue);
+        return issuer;
+    }
+    
+    private Assertion buildAssertion(String issuer) {
+        Assertion assertion = new AssertionBuilder().buildObject();
+        assertion.setIssuer(buildIssuer(issuer));
+        return assertion;
+    }
+    
+    private void signResponse(Response response) throws Exception {
+        Credential signingCredential = getSigningCredential();
+        Signature signature = new SignatureBuilder().buildObject();
+        signature.setSigningCredential(signingCredential);
+        signature.setSignatureAlgorithm(SignatureConstants.ALGO_ID_SIGNATURE_RSA_SHA256);
+        response.setSignature(signature);
+        Signer.signObject(signature);
+    }
+    
+    private Credential getSigningCredential() throws Exception {
+        KeyStore keystore = KeyStore.getInstance("JKS");
+        keystore.load(getClass().getResourceAsStream("/keystore.jks"), "password".toCharArray());
+        PrivateKey privateKey = (PrivateKey) keystore.getKey("alias", "password".toCharArray());
+        X509Certificate certificate = (X509Certificate) keystore.getCertificate("alias");
+        return CredentialSupport.getSimpleCredential(certificate, privateKey);
+    }
+}

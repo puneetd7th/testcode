@@ -461,7 +461,30 @@ This setup provides a functional IdP-initiated SAML flow with encryption and sig
 
 
 
+import org.apache.commons.codec.binary.Base64;
+import org.opensaml.core.config.InitializationService;
+import org.opensaml.core.xml.config.XMLObjectProviderRegistrySupport;
+import org.opensaml.saml.saml2.core.Assertion;
+import org.opensaml.saml.saml2.core.EncryptedAssertion;
+import org.opensaml.security.credential.BasicCredential;
+import org.opensaml.security.credential.Credential;
+import org.opensaml.xmlsec.decryption.support.Decrypter;
+import org.opensaml.xmlsec.decryption.support.InlineEncryptedKeyResolver;
+import org.opensaml.xmlsec.keyinfo.impl.StaticKeyInfoCredentialResolver;
+import org.opensaml.xmlsec.signature.support.SignatureValidator;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
 
+import javax.annotation.PostConstruct;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
 @RestController
 public class SamlSpController {
 

@@ -1,0 +1,113 @@
+# SAML Federation with IdP-Initiated Flow using Spring Boot and OpenSAML
+
+## Overview
+This document provides an implementation guide for setting up a SAML federation with an IdP-initiated flow using **Spring Boot** and **OpenSAML**. OpenSAML is used for encryption, signing, and custom implementations, offering flexibility over high-level abstractions like **Spring Security SAML**.
+
+## Key Requirements
+
+### IdP Tasks:
+1. **Initiate SAML Assertion Request**: Expose an API to generate and send the assertion.
+2. **Generate and Encrypt Assertion**:
+   - Create an assertion.
+   - Encrypt it with a symmetric key (AES).
+   - Encrypt the symmetric key with the SP’s RSA public key.
+   - Sign the assertion using the IdP’s private key.
+3. **Add Custom Parameters**: Include required attributes in the assertion.
+
+### SP Tasks:
+1. **Receive SAML Assertion**: Expose an endpoint to accept the assertion.
+2. **Validate and Decrypt**:
+   - Verify the signature with the IdP’s public key.
+   - Decrypt the symmetric key using the SP’s private key.
+   - Decrypt the assertion and extract required parameters.
+
+## Cryptographic Details
+- **Signature Algorithm**: SHA256withRSA
+- **Public Key**: RSA, 2048 bits
+- **Encryption**:
+  - AES for assertion encryption (symmetric encryption).
+  - RSA for encrypting the symmetric key.
+
+## Generating Key Pairs
+Execute the following OpenSSL commands to generate the required key pairs for IdP and SP:
+
+```sh
+# Generate IdP private key (PKCS#1 format)
+openssl genrsa -out idp_private_key_pkcs.pem 2048
+
+# Convert IdP private key to PKCS#8 format
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in idp_private_key_pkcs.pem -out idp_private_key.pem
+
+# Generate IdP public key
+openssl rsa -in idp_private_key.pem -pubout -out idp_public_key.pem
+
+# Generate SP private key (PKCS#1 format)
+openssl genrsa -out sp_private_key_pkcs.pem 2048
+
+# Convert SP private key to PKCS#8 format
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in sp_private_key_pkcs.pem -out sp_private_key.pem
+
+# Generate SP public key
+openssl rsa -in sp_private_key.pem -pubout -out sp_public_key.pem
+```
+
+## Implementation
+
+### IdP: Generate and Sign Assertion
+```java
+Assertion assertion = buildSAMLAssertion();
+Credential signingCredential = getCredential("idp_private_key.pem");
+Signature signature = SignatureSupport.signObject(assertion, signingCredential);
+```
+
+### IdP: Encrypt Assertion with AES Key
+```java
+SecretKey aesKey = generateAESKey();
+EncryptedAssertion encryptedAssertion = encryptAssertion(assertion, aesKey);
+```
+
+### IdP: Encrypt AES Key with SP's RSA Public Key
+```java
+PublicKey spPublicKey = getPublicKey("sp_public_key.pem");
+byte[] encryptedAESKey = encryptWithRSA(aesKey.getEncoded(), spPublicKey);
+```
+
+### SP: Decrypt AES Key using Private Key
+```java
+PrivateKey spPrivateKey = getPrivateKey("sp_private_key.pem");
+byte[] decryptedAESKey = decryptWithRSA(encryptedAESKey, spPrivateKey);
+SecretKey aesKey = new SecretKeySpec(decryptedAESKey, "AES");
+```
+
+### SP: Decrypt Assertion
+```java
+Assertion decryptedAssertion = decryptAssertion(encryptedAssertion, aesKey);
+```
+
+### SP: Validate Signature
+```java
+Credential idpCredential = getCredential("idp_public_key.pem");
+boolean isValid = SignatureSupport.verifySignature(assertion.getSignature(), idpCredential);
+```
+
+## SAML Authentication Flow Diagram (PlantUML)
+```plantuml
+@startuml
+participant User
+participant IdP
+participant SP
+
+User -> IdP: Login Request
+IdP -> IdP: Generate SAML Assertion
+IdP -> IdP: Encrypt & Sign Assertion
+IdP -> SP: Send SAML Assertion
+SP -> SP: Validate Signature
+SP -> SP: Decrypt Assertion
+SP -> User: Grant Access
+@enduml
+```
+
+## Summary
+This guide outlines the process of setting up a **SAML federation** using an **IdP-initiated flow**. The implementation includes **key pair generation, encryption, decryption, and signature validation** using OpenSAML in **Spring Boot**.
+
+This modular approach ensures **secure communication** between IdP and SP, enabling federated authentication with **encrypted and signed

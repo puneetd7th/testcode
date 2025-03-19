@@ -1,0 +1,432 @@
+Let’s create a SAML federation with an IdP-initiated flow using Spring Boot and OpenSAML. OpenSAML is the underlying library used by Spring Security SAML, and it provides more flexibility for custom implementations like encryption and signing, making it a better fit for your requirements compared to Spring Security SAML’s higher-level abstractions. I’ll guide you through the code for both the Identity Provider (IdP) and Service Provider (SP), explain the flow, and provide steps for key generation and testing.
+
+Key Requirements Recap
+IdP Tasks:
+Create a Spring endpoint to initiate a SAML assertion request.
+Generate a SAML assertion, encrypt it with a symmetric key (AES), encrypt the symmetric key with the SP’s RSA public key, and sign the assertion with the IdP’s private key using SHA256withRSA.
+Add custom parameters to the assertion.
+SP Tasks:
+Provide an endpoint to receive the SAML assertion.
+Validate the signature with the IdP’s public key, decrypt the symmetric key with the SP’s private key, decrypt the assertion, and extract/display custom parameters.
+Crypto Details:
+Signature: SHA256withRSA.
+Public key: RSA, 2048 bits.
+Encryption: Symmetric (AES) for assertion, RSA for symmetric key.
+Step 1: Generate Keys
+Before coding, generate the RSA key pairs for IdP (signing) and SP (encryption/decryption).
+
+Commands to Generate Keys
+IdP Key Pair (Private/Public for Signing):
+bash
+
+Collapse
+
+Wrap
+
+Copy
+openssl genrsa -out idp_private_key.pem 2048
+openssl rsa -in idp_private_key.pem -pubout -out idp_public_key.pem
+idp_private_key.pem: IdP’s private key for signing.
+idp_public_key.pem: IdP’s public key for SP to verify the signature.
+SP Key Pair (Private/Public for Encryption/Decryption):
+bash
+
+Collapse
+
+Wrap
+
+Copy
+openssl genrsa -out sp_private_key.pem 2048
+openssl rsa -in sp_private_key.pem -pubout -out sp_public_key.pem
+sp_private_key.pem: SP’s private key for decrypting the symmetric key.
+sp_public_key.pem: SP’s public key for IdP to encrypt the symmetric key.
+Place Keys in Resources:
+Copy idp_private_key.pem and idp_public_key.pem to idp/src/main/resources/keys/.
+Copy sp_private_key.pem and sp_public_key.pem to sp/src/main/resources/keys/.
+Step 2: IdP Implementation
+Maven Dependencies (pom.xml)
+xml
+
+Collapse
+
+Wrap
+
+Copy
+<dependencies>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+        <version>3.2.3</version>
+    </dependency>
+    <dependency>
+        <groupId>org.opensaml</groupId>
+        <artifactId>opensaml-core</artifactId>
+        <version>4.1.1</version>
+    </dependency>
+    <dependency>
+        <groupId>org.opensaml</groupId>
+        <artifactId>opensaml-saml-impl</artifactId>
+        <version>4.1.1</version>
+    </dependency>
+    <dependency>
+        <groupId>org.opensaml</groupId>
+        <artifactId>opensaml-security-impl</artifactId>
+        <version>4.1.1</version>
+    </dependency>
+</dependencies>
+IdP Application (IdpApplication.java)
+java
+
+Collapse
+
+Wrap
+
+Copy
+package com.example.idp;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class IdpApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(IdpApplication.class, args);
+    }
+}
+IdP Controller (SamlIdpController.java)
+java
+
+Collapse
+
+Wrap
+
+Copy
+package com.example.idp;
+
+import org.apache.commons.codec.binary.Base64;
+import org.joda.time.DateTime;
+import org.opensaml.core.config.InitializationService;
+import org.opensaml.core.xml.config.XMLObjectProviderRegistrySupport;
+import org.opensaml.core.xml.io.MarshallingException;
+import org.opensaml.saml.common.SAMLObjectBuilder;
+import org.opensaml.saml.saml2.core.*;
+import org.opensaml.security.credential.Credential;
+import org.opensaml.security.x509.BasicX509Credential;
+import org.opensaml.xmlsec.algorithm.AlgorithmSupport;
+import org.opensaml.xmlsec.encryption.support.DataEncryptionParameters;
+import org.opensaml.xmlsec.encryption.support.EncryptionConstants;
+import org.opensaml.xmlsec.encryption.support.KeyEncryptionParameters;
+import org.opensaml.xmlsec.signature.support.SignatureConstants;
+import org.opensaml.xmlsec.signature.support.Signer;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import javax.annotation.PostConstruct;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.cert.X509Certificate;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
+
+@RestController
+public class SamlIdpController {
+
+    private Credential signingCredential;
+    private PublicKey spPublicKey;
+
+    @PostConstruct
+    public void init() throws Exception {
+        InitializationService.initialize();
+
+        // Load IdP private key for signing
+        InputStream privateKeyStream = new ClassPathResource("keys/idp_private_key.pem").getInputStream();
+        String privateKeyPem = new String(privateKeyStream.readAllBytes(), StandardCharsets.UTF_8)
+                .replace("-----BEGIN RSA PRIVATE KEY-----", "")
+                .replace("-----END RSA PRIVATE KEY-----", "")
+                .replaceAll("\\s", "");
+        byte[] privateKeyBytes = Base64.decodeBase64(privateKeyPem);
+        PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(privateKeyBytes);
+        PrivateKey privateKey = KeyFactory.getInstance("RSA").generatePrivate(keySpec);
+
+        // Dummy certificate for credential (replace with real cert if needed)
+        X509Certificate dummyCert = null; // Optional: Load real cert if required
+        signingCredential = new BasicX509Credential(null);
+        signingCredential.setPrivateKey(privateKey);
+
+        // Load SP public key for encryption
+        InputStream publicKeyStream = new ClassPathResource("keys/sp_public_key.pem").getInputStream();
+        String publicKeyPem = new String(publicKeyStream.readAllBytes(), StandardCharsets.UTF_8)
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "")
+                .replaceAll("\\s", "");
+        byte[] publicKeyBytes = Base64.decodeBase64(publicKeyPem);
+        X509EncodedKeySpec pubKeySpec = new X509EncodedKeySpec(publicKeyBytes);
+        spPublicKey = KeyFactory.getInstance("RSA").generatePublic(pubKeySpec);
+    }
+
+    @GetMapping("/saml/assertion")
+    public String initiateSamlAssertion() throws Exception {
+        // Build SAML Assertion
+        SAMLObjectBuilder<Assertion> assertionBuilder = (SAMLObjectBuilder<Assertion>)
+                XMLObjectProviderRegistrySupport.getBuilderFactory().getBuilder(Assertion.DEFAULT_ELEMENT_NAME);
+        Assertion assertion = assertionBuilder.buildObject();
+        assertion.setIssuer(buildIssuer());
+        assertion.setIssueInstant(new DateTime());
+        assertion.setSubject(buildSubject());
+        assertion.getAttributeStatements().add(buildAttributeStatement());
+
+        // Sign the Assertion
+        AlgorithmSupport.signObject(assertion, signingCredential,
+                SignatureConstants.ALGO_ID_SIGNATURE_RSA_SHA256,
+                SignatureConstants.ALGO_ID_DIGEST_SHA256);
+        Signer.signObject(assertion.getSignature());
+
+        // Encrypt the Assertion
+        SecretKey symmetricKey = KeyGenerator.getInstance("AES").generateKey();
+        DataEncryptionParameters dataEncParams = new DataEncryptionParameters();
+        dataEncParams.setAlgorithm(EncryptionConstants.ALGO_ID_BLOCKCIPHER_AES256);
+        dataEncParams.setEncryptionKey(symmetricKey);
+
+        KeyEncryptionParameters keyEncParams = new KeyEncryptionParameters();
+        keyEncParams.setAlgorithm(EncryptionConstants.ALGO_ID_KEYTRANSPORT_RSAOAEP);
+        keyEncParams.setEncryptionKey(spPublicKey);
+
+        EncryptedAssertion encryptedAssertion = AlgorithmSupport.encrypt(assertion, dataEncParams, keyEncParams);
+
+        // Serialize to XML
+        String xmlString = XMLObjectProviderRegistrySupport.getMarshallerFactory()
+                .getMarshaller(encryptedAssertion).marshall(encryptedAssertion).toString();
+
+        // Base64 encode for POST
+        return Base64.encodeBase64String(xmlString.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private Issuer buildIssuer() {
+        SAMLObjectBuilder<Issuer> issuerBuilder = (SAMLObjectBuilder<Issuer>)
+                XMLObjectProviderRegistrySupport.getBuilderFactory().getBuilder(Issuer.DEFAULT_ELEMENT_NAME);
+        Issuer issuer = issuerBuilder.buildObject();
+        issuer.setValue("http://idp.example.com");
+        return issuer;
+    }
+
+    private Subject buildSubject() {
+        SAMLObjectBuilder<Subject> subjectBuilder = (SAMLObjectBuilder<Subject>)
+                XMLObjectProviderRegistrySupport.getBuilderFactory().getBuilder(Subject.DEFAULT_ELEMENT_NAME);
+        Subject subject = subjectBuilder.buildObject();
+        SAMLObjectBuilder<NameID> nameIdBuilder = (SAMLObjectBuilder<NameID>)
+                XMLObjectProviderRegistrySupport.getBuilderFactory().getBuilder(NameID.DEFAULT_ELEMENT_NAME);
+        NameID nameId = nameIdBuilder.buildObject();
+        nameId.setValue("user@example.com");
+        subject.setNameID(nameId);
+        return subject;
+    }
+
+    private AttributeStatement buildAttributeStatement() {
+        SAMLObjectBuilder<AttributeStatement> attrStmtBuilder = (SAMLObjectBuilder<AttributeStatement>)
+                XMLObjectProviderRegistrySupport.getBuilderFactory().getBuilder(AttributeStatement.DEFAULT_ELEMENT_NAME);
+        AttributeStatement attrStmt = attrStmtBuilder.buildObject();
+
+        SAMLObjectBuilder<Attribute> attrBuilder = (SAMLObjectBuilder<Attribute>)
+                XMLObjectProviderRegistrySupport.getBuilderFactory().getBuilder(Attribute.DEFAULT_ELEMENT_NAME);
+        Attribute attr = attrBuilder.buildObject();
+        attr.setName("customParam");
+        SAMLObjectBuilder<AttributeValue> attrValueBuilder = (SAMLObjectBuilder<AttributeValue>)
+                XMLObjectProviderRegistrySupport.getBuilderFactory().getBuilder(AttributeValue.DEFAULT_ELEMENT_NAME);
+        AttributeValue attrValue = attrValueBuilder.buildObject();
+        attrValue.setTextContent("customValue");
+        attr.getAttributeValues().add(attrValue);
+        attrStmt.getAttributes().add(attr);
+        return attrStmt;
+    }
+}
+IdP Configuration (application.yml)
+yaml
+
+Collapse
+
+Wrap
+
+Copy
+server:
+  port: 8081
+Step 3: SP Implementation
+Maven Dependencies (pom.xml)
+Same as IdP, reuse the above pom.xml.
+
+SP Application (SpApplication.java)
+java
+
+Collapse
+
+Wrap
+
+Copy
+package com.example.sp;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class SpApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(SpApplication.class, args);
+    }
+}
+SP Controller (SamlSpController.java)
+java
+
+Collapse
+
+Wrap
+
+Copy
+package com.example.sp;
+
+import org.apache.commons.codec.binary.Base64;
+import org.opensaml.core.config.InitializationService;
+import org.opensaml.core.xml.config.XMLObjectProviderRegistrySupport;
+import org.opensaml.saml.saml2.core.Assertion;
+import org.opensaml.saml.saml2.core.EncryptedAssertion;
+import org.opensaml.security.credential.Credential;
+import org.opensaml.security.x509.BasicX509Credential;
+import org.opensaml.xmlsec.signature.support.SignatureValidator;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+import javax.annotation.PostConstruct;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
+
+@RestController
+public class SamlSpController {
+
+    private Credential decryptionCredential;
+    private PublicKey idpPublicKey;
+
+    @PostConstruct
+    public void init() throws Exception {
+        InitializationService.initialize();
+
+        // Load SP private key for decryption
+        InputStream privateKeyStream = new ClassPathResource("keys/sp_private_key.pem").getInputStream();
+        String privateKeyPem = new String(privateKeyStream.readAllBytes(), StandardCharsets.UTF_8)
+                .replace("-----BEGIN RSA PRIVATE KEY-----", "")
+                .replace("-----END RSA PRIVATE KEY-----", "")
+                .replaceAll("\\s", "");
+        byte[] privateKeyBytes = Base64.decodeBase64(privateKeyPem);
+        PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(privateKeyBytes);
+        PrivateKey privateKey = KeyFactory.getInstance("RSA").generatePrivate(keySpec);
+        decryptionCredential = new BasicX509Credential(null);
+        decryptionCredential.setPrivateKey(privateKey);
+
+        // Load IdP public key for signature validation
+        InputStream publicKeyStream = new ClassPathResource("keys/idp_public_key.pem").getInputStream();
+        String publicKeyPem = new String(publicKeyStream.readAllBytes(), StandardCharsets.UTF_8)
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "")
+                .replaceAll("\\s", "");
+        byte[] publicKeyBytes = Base64.decodeBase64(publicKeyPem);
+        X509EncodedKeySpec pubKeySpec = new X509EncodedKeySpec(publicKeyBytes);
+        idpPublicKey = KeyFactory.getInstance("RSA").generatePublic(pubKeySpec);
+    }
+
+    @PostMapping("/saml/SSO")
+    public String receiveSamlAssertion(@RequestBody String samlResponse) throws Exception {
+        // Decode Base64 SAML response
+        byte[] decodedBytes = Base64.decodeBase64(samlResponse);
+        String xmlString = new String(decodedBytes, StandardCharsets.UTF_8);
+
+        // Unmarshall XML to EncryptedAssertion
+        EncryptedAssertion encryptedAssertion = (EncryptedAssertion) XMLObjectProviderRegistrySupport
+                .getUnmarshallerFactory().getUnmarshaller(EncryptedAssertion.DEFAULT_ELEMENT_NAME)
+                .unmarshall(XMLObjectProviderRegistrySupport.getParserPool().parse(xmlString));
+
+        // Decrypt the Assertion
+        Assertion assertion = AlgorithmSupport.decrypt(encryptedAssertion, decryptionCredential);
+
+        // Validate Signature
+        Credential validationCredential = new BasicX509Credential(null);
+        validationCredential.setPublicKey(idpPublicKey);
+        SignatureValidator.validate(assertion.getSignature(), validationCredential);
+
+        // Extract custom parameter
+        String customParam = assertion.getAttributeStatements().get(0)
+                .getAttributes().get(0).getAttributeValues().get(0).getTextContent();
+
+        return "Assertion validated. Custom Parameter: " + customParam;
+    }
+}
+SP Configuration (application.yml)
+yaml
+
+Collapse
+
+Wrap
+
+Copy
+server:
+  port: 8080
+Flow Explanation
+IdP Initiates:
+User accesses http://localhost:8081/saml/assertion.
+IdP generates a SAML Assertion with a subject and custom attribute (customParam).
+Assertion is signed with IdP’s private key (SHA256withRSA).
+Assertion is encrypted with a symmetric AES key, and the AES key is encrypted with SP’s RSA public key.
+The encrypted assertion is Base64-encoded and sent to SP (e.g., via POST).
+SP Receives:
+SP receives the Base64-encoded SAML response at http://localhost:8080/saml/SSO.
+Decodes the Base64 string and unmarshalls it into an EncryptedAssertion.
+Decrypts the symmetric key using SP’s private key, then decrypts the assertion with the symmetric key.
+Validates the signature using IdP’s public key.
+Extracts and displays the custom parameter.
+Testing Steps
+Setup Projects:
+Create two Spring Boot projects: idp and sp.
+Add the above code and dependencies to their respective projects.
+Place the generated keys in src/main/resources/keys/ for both projects.
+Run Applications:
+Start the IdP: cd idp && mvn spring-boot:run.
+Start the SP: cd sp && mvn spring-boot:run.
+Test IdP Endpoint:
+Open a browser or use curl:
+bash
+
+Collapse
+
+Wrap
+
+Copy
+curl http://localhost:8081/saml/assertion
+Copy the Base64-encoded response.
+Test SP Endpoint:
+Use curl to POST the Base64 response to SP:
+bash
+
+Collapse
+
+Wrap
+
+Copy
+curl -X POST http://localhost:8080/saml/SSO -d "<Base64_response_from_IdP>"
+Expected output: Assertion validated. Custom Parameter: customValue.
+Verify Failure Cases:
+Modify the Base64 string slightly and resend—SP should throw a signature validation or decryption error.
+Use a wrong IdP public key in SP—signature validation should fail.
+Notes
+OpenSAML: Chosen over Spring Security SAML for its low-level control over encryption and signing, aligning with your custom requirements.
+Security: In production, use proper X509 certificates and secure key storage (e.g., JKS or HSM).
+Extensions: Add error handling, logging, and metadata exchange for a full SAML federation.
+This setup provides a functional IdP-initiated SAML flow with encryption and signing as specified, ready for testing and further customization. Let me know if you need additional tweaks!

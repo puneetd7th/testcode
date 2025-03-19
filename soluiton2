@@ -139,7 +139,7 @@ public class SamlIdpController {
     private Credential signingCredential;
     private PublicKey spPublicKey;
 
-    @PostConstruct
+   @PostConstruct
     public void init() throws Exception {
         InitializationService.initialize();
 
@@ -150,20 +150,31 @@ public class SamlIdpController {
                 .replace("-----END RSA PRIVATE KEY-----", "")
                 .replaceAll("\\s", "");
         byte[] privateKeyBytes = Base64.decodeBase64(privateKeyPem);
-        PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(privateKeyBytes);
-        PrivateKey privateKey = KeyFactory.getInstance("RSA").generatePrivate(keySpec);
-        signingCredential = new BasicX509Credential(null);
-        signingCredential.setPrivateKey(privateKey);
+        PKCS8EncodedKeySpec privateKeySpec = new PKCS8EncodedKeySpec(privateKeyBytes);
+        PrivateKey idpPrivateKey = KeyFactory.getInstance("RSA").generatePrivate(privateKeySpec);
 
-        // Load SP public key for encryption
-        InputStream publicKeyStream = new ClassPathResource("keys/sp_public_key.pem").getInputStream();
-        String publicKeyPem = new String(publicKeyStream.readAllBytes(), StandardCharsets.UTF_8)
+        // Load IdP public key (required by BasicCredential)
+        InputStream idpPublicKeyStream = new ClassPathResource("keys/idp_public_key.pem").getInputStream();
+        String idpPublicKeyPem = new String(idpPublicKeyStream.readAllBytes(), StandardCharsets.UTF_8)
                 .replace("-----BEGIN PUBLIC KEY-----", "")
                 .replace("-----END PUBLIC KEY-----", "")
                 .replaceAll("\\s", "");
-        byte[] publicKeyBytes = Base64.decodeBase64(publicKeyPem);
-        X509EncodedKeySpec pubKeySpec = new X509EncodedKeySpec(publicKeyBytes);
-        spPublicKey = KeyFactory.getInstance("RSA").generatePublic(pubKeySpec);
+        byte[] idpPublicKeyBytes = Base64.decodeBase64(idpPublicKeyPem);
+        X509EncodedKeySpec idpPublicKeySpec = new X509EncodedKeySpec(idpPublicKeyBytes);
+        PublicKey idpPublicKey = KeyFactory.getInstance("RSA").generatePublic(idpPublicKeySpec);
+
+        // Initialize signingCredential with both public and private keys
+        signingCredential = new BasicCredential(idpPublicKey, idpPrivateKey);
+
+        // Load SP public key for encryption
+        InputStream spPublicKeyStream = new ClassPathResource("keys/sp_public_key.pem").getInputStream();
+        String spPublicKeyPem = new String(spPublicKeyStream.readAllBytes(), StandardCharsets.UTF_8)
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "")
+                .replaceAll("\\s", "");
+        byte[] spPublicKeyBytes = Base64.decodeBase64(spPublicKeyPem);
+        X509EncodedKeySpec spPublicKeySpec = new X509EncodedKeySpec(spPublicKeyBytes);
+        spPublicKey = KeyFactory.getInstance("RSA").generatePublic(spPublicKeySpec);
     }
 
     @GetMapping("/saml/assertion")

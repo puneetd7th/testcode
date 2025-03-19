@@ -134,7 +134,6 @@ import java.security.cert.X509Certificate;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 
-@RestController
 public class SamlIdpController {
 
     private Credential signingCredential;
@@ -153,9 +152,6 @@ public class SamlIdpController {
         byte[] privateKeyBytes = Base64.decodeBase64(privateKeyPem);
         PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(privateKeyBytes);
         PrivateKey privateKey = KeyFactory.getInstance("RSA").generatePrivate(keySpec);
-
-        // Dummy certificate for credential (replace with real cert if needed)
-        X509Certificate dummyCert = null; // Optional: Load real cert if required
         signingCredential = new BasicX509Credential(null);
         signingCredential.setPrivateKey(privateKey);
 
@@ -181,23 +177,37 @@ public class SamlIdpController {
         assertion.setSubject(buildSubject());
         assertion.getAttributeStatements().add(buildAttributeStatement());
 
-        // Sign the Assertion
-        AlgorithmSupport.signObject(assertion, signingCredential,
-                SignatureConstants.ALGO_ID_SIGNATURE_RSA_SHA256,
-                SignatureConstants.ALGO_ID_DIGEST_SHA256);
-        Signer.signObject(assertion.getSignature());
+        // Create and attach Signature
+        SAMLObjectBuilder<Signature> signatureBuilder = (SAMLObjectBuilder<Signature>)
+                XMLObjectProviderRegistrySupport.getBuilderFactory().getBuilder(Signature.DEFAULT_ELEMENT_NAME);
+        Signature signature = signatureBuilder.buildObject();
+        signature.setSigningCredential(signingCredential);
+        signature.setSignatureAlgorithm(SignatureConstants.ALGO_ID_SIGNATURE_RSA_SHA256);
+        signature.setCanonicalizationAlgorithm(SignatureConstants.ALGO_ID_C14N_EXCL_OMIT_COMMENTS);
+        assertion.setSignature(signature);
+
+        // Marshall the assertion to prepare it for signing
+        XMLObjectProviderRegistrySupport.getMarshallerFactory()
+                .getMarshaller(assertion).marshall(assertion);
+
+        // Sign the assertion
+        Signer.signObject(signature);
 
         // Encrypt the Assertion
         SecretKey symmetricKey = KeyGenerator.getInstance("AES").generateKey();
         DataEncryptionParameters dataEncParams = new DataEncryptionParameters();
         dataEncParams.setAlgorithm(EncryptionConstants.ALGO_ID_BLOCKCIPHER_AES256);
-        dataEncParams.setEncryptionKey(symmetricKey);
+        dataEncParams.setEncryptionCredentials(new BasicX509Credential(null));
+        dataEncParams.getEncryptionCredentials().setSecretKey(symmetricKey);
 
         KeyEncryptionParameters keyEncParams = new KeyEncryptionParameters();
         keyEncParams.setAlgorithm(EncryptionConstants.ALGO_ID_KEYTRANSPORT_RSAOAEP);
-        keyEncParams.setEncryptionKey(spPublicKey);
+        keyEncParams.setEncryptionCredential(new BasicX509Credential(null));
+        keyEncParams.getEncryptionCredential().setPublicKey(spPublicKey);
 
-        EncryptedAssertion encryptedAssertion = AlgorithmSupport.encrypt(assertion, dataEncParams, keyEncParams);
+        Encrypter encrypter = new Encrypter(dataEncParams, keyEncParams);
+        encrypter.setKeyPlacement(Encrypter.KeyPlacement.INLINE);
+        EncryptedAssertion encryptedAssertion = encrypter.encrypt(assertion);
 
         // Serialize to XML
         String xmlString = XMLObjectProviderRegistrySupport.getMarshallerFactory()

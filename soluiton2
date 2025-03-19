@@ -458,3 +458,78 @@ OpenSAML: Chosen over Spring Security SAML for its low-level control over encryp
 Security: In production, use proper X509 certificates and secure key storage (e.g., JKS or HSM).
 Extensions: Add error handling, logging, and metadata exchange for a full SAML federation.
 This setup provides a functional IdP-initiated SAML flow with encryption and signing as specified, ready for testing and further customization. Let me know if you need additional tweaks!
+
+
+
+
+@RestController
+public class SamlSpController {
+
+    private Credential decryptionCredential;
+    private PublicKey idpPublicKey;
+
+    @PostConstruct
+    public void init() throws Exception {
+        InitializationService.initialize();
+
+        // Load SP private key for decryption
+        InputStream privateKeyStream = new ClassPathResource("keys/sp_private_key.pem").getInputStream();
+        String privateKeyPem = new String(privateKeyStream.readAllBytes(), StandardCharsets.UTF_8)
+                .replace("-----BEGIN RSA PRIVATE KEY-----", "")
+                .replace("-----END RSA PRIVATE KEY-----", "")
+                .replaceAll("\\s", "");
+        byte[] privateKeyBytes = Base64.decodeBase64(privateKeyPem);
+        PKCS8EncodedKeySpec privateKeySpec = new PKCS8EncodedKeySpec(privateKeyBytes);
+        PrivateKey spPrivateKey = KeyFactory.getInstance("RSA").generatePrivate(privateKeySpec);
+
+        // Load SP public key (required by BasicCredential)
+        InputStream spPublicKeyStream = new ClassPathResource("keys/sp_public_key.pem").getInputStream();
+        String spPublicKeyPem = new String(spPublicKeyStream.readAllBytes(), StandardCharsets.UTF_8)
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "")
+                .replaceAll("\\s", "");
+        byte[] spPublicKeyBytes = Base64.decodeBase64(spPublicKeyPem);
+        X509EncodedKeySpec spPublicKeySpec = new X509EncodedKeySpec(spPublicKeyBytes);
+        PublicKey spPublicKey = KeyFactory.getInstance("RSA").generatePublic(spPublicKeySpec);
+
+        // Initialize decryptionCredential with both public and private keys
+        decryptionCredential = new BasicCredential(spPublicKey, spPrivateKey);
+
+        // Load IdP public key for signature validation
+        InputStream idpPublicKeyStream = new ClassPathResource("keys/idp_public_key.pem").getInputStream();
+        String idpPublicKeyPem = new String(idpPublicKeyStream.readAllBytes(), StandardCharsets.UTF_8)
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "")
+                .replaceAll("\\s", "");
+        byte[] idpPublicKeyBytes = Base64.decodeBase64(idpPublicKeyPem);
+        X509EncodedKeySpec idpPublicKeySpec = new X509EncodedKeySpec(idpPublicKeyBytes);
+        idpPublicKey = KeyFactory.getInstance("RSA").generatePublic(idpPublicKeySpec);
+    }
+
+    @PostMapping("/saml/SSO")
+    public String receiveSamlAssertion(@RequestBody String samlResponse) throws Exception {
+        // Decode Base64 SAML response
+        byte[] decodedBytes = Base64.decodeBase64(samlResponse);
+        String xmlString = new String(decodedBytes, StandardCharsets.UTF_8);
+
+        // Unmarshall XML to EncryptedAssertion
+        EncryptedAssertion encryptedAssertion = (EncryptedAssertion) XMLObjectProviderRegistrySupport
+                .getUnmarshallerFactory().getUnmarshaller(EncryptedAssertion.DEFAULT_ELEMENT_NAME)
+                .unmarshall(XMLObjectProviderRegistrySupport.getParserPool().parse(xmlString));
+
+        // Decrypt the Assertion
+        StaticKeyInfoCredentialResolver keyInfoResolver = new StaticKeyInfoCredentialResolver(decryptionCredential);
+        Decrypter decrypter = new Decrypter(null, keyInfoResolver, new InlineEncryptedKeyResolver());
+        Assertion assertion = decrypter.decrypt(encryptedAssertion);
+
+        // Validate Signature
+        BasicCredential validationCredential = new BasicCredential(idpPublicKey);
+        SignatureValidator.validate(assertion.getSignature(), validationCredential);
+
+        // Extract custom parameter
+        String customParam = assertion.getAttributeStatements().get(0)
+                .getAttributes().get(0).getAttributeValues().get(0).getTextContent();
+
+        return "Assertion validated. Custom Parameter: " + customParam;
+    }
+}

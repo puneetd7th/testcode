@@ -4,6 +4,12 @@ openssl rsa -in idp_private_key.pem -pubout -out idp_public_key.pem
 openssl genrsa -out sp_private_key.pem 2048
 openssl rsa -in sp_private_key.pem -pubout -out sp_public_key.pem
 
+openssl genrsa -out keys/idp_private_key_pkcs1.pem 2048
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in keys/idp_private_key_pkcs1.pem -out keys/idp_private_key.pem
+openssl rsa -in keys/idp_private_key.pem -pubout -out keys/idp_public_key.pem
+openssl genrsa -out keys/sp_private_key_pkcs1.pem 2048
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in keys/sp_private_key_pkcs1.pem -out keys/sp_private_key.pem
+openssl rsa -in keys/sp_private_key.pem -pubout -out keys/sp_public_key.pem
 
 Let’s create a SAML federation with an IdP-initiated flow using Spring Boot and OpenSAML. OpenSAML is the underlying library used by Spring Security SAML, and it provides more flexibility for custom implementations like encryption and signing, making it a better fit for your requirements compared to Spring Security SAML’s higher-level abstractions. I’ll guide you through the code for both the Identity Provider (IdP) and Service Provider (SP), explain the flow, and provide steps for key generation and testing.
 

@@ -1,0 +1,74 @@
+public static void main(String[] args) throws Exception {
+        KmsClient kmsClient = KmsClient.create();
+        String keyId = "alias/my-key";  // Change this to your KMS Key ID or Alias
+
+        // Step 1: Generate RSA Key Pair from AWS KMS
+        GenerateDataKeyPairWithoutPlaintextRequest request = GenerateDataKeyPairWithoutPlaintextRequest.builder()
+                .keyId(keyId)
+                .keyPairSpec(KeyPairSpec.RSA_2048)
+                .build();
+
+        GenerateDataKeyPairWithoutPlaintextResponse response = kmsClient.generateDataKeyPairWithoutPlaintext(request);
+        ByteBuffer publicKeyBuffer = response.publicKey();
+        ByteBuffer encryptedPrivateKeyBuffer = response.privateKeyCiphertextBlob();
+
+        // Step 2: Decrypt Private Key
+        DecryptRequest decryptRequest = DecryptRequest.builder()
+                .ciphertextBlob(encryptedPrivateKeyBuffer)
+                .build();
+
+        DecryptResponse decryptResponse = kmsClient.decrypt(decryptRequest);
+        ByteBuffer decryptedPrivateKeyBuffer = decryptResponse.plaintext();
+        byte[] decryptedPrivateKeyBytes = new byte[decryptedPrivateKeyBuffer.remaining()];
+        decryptedPrivateKeyBuffer.get(decryptedPrivateKeyBytes);
+
+        // Step 3: Convert Keys to Java Key Objects
+        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+
+        // Public Key
+        byte[] publicKeyBytes = new byte[publicKeyBuffer.remaining()];
+        publicKeyBuffer.get(publicKeyBytes);
+        PublicKey publicKey = keyFactory.generatePublic(new X509EncodedKeySpec(publicKeyBytes));
+
+        // Private Key
+        PrivateKey privateKey = keyFactory.generatePrivate(new PKCS8EncodedKeySpec(decryptedPrivateKeyBytes));
+
+        // Step 4: Generate a Self-Signed Certificate
+        X509Certificate certificate = generateSelfSignedCertificate(publicKey, privateKey);
+
+        // Step 5: Convert Certificate to PEM String
+        String certificatePEM = convertCertificateToPEM(certificate);
+
+        // Print the Certificate
+        System.out.println("Self-Signed Certificate:\n" + certificatePEM);
+    }
+
+    // Function to generate a self-signed X.509 certificate
+    public static X509Certificate generateSelfSignedCertificate(PublicKey publicKey, PrivateKey privateKey) throws Exception {
+        long validity = 365 * 24 * 60 * 60 * 1000L; // 1 Year Validity
+        Date startDate = new Date();
+        Date expiryDate = new Date(startDate.getTime() + validity);
+
+        X509CertInfo certInfo = new X509CertInfo();
+        certInfo.set(X509CertInfo.VALIDITY, new CertificateValidity(startDate, expiryDate));
+        certInfo.set(X509CertInfo.SERIAL_NUMBER, new CertificateSerialNumber(new BigInteger(64, new SecureRandom())));
+        certInfo.set(X509CertInfo.SUBJECT, new X500Name("CN=MySelfSignedCert"));
+        certInfo.set(X509CertInfo.ISSUER, new X500Name("CN=MySelfSignedCert"));
+        certInfo.set(X509CertInfo.KEY, new CertificateX509Key(publicKey));
+        certInfo.set(X509CertInfo.VERSION, new CertificateVersion(CertificateVersion.V3));
+        certInfo.set(X509CertInfo.ALGORITHM_ID, new CertificateAlgorithmId(AlgorithmId.get("SHA256withRSA")));
+
+        // Sign the certificate
+        X509CertImpl cert = new X509CertImpl(certInfo);
+        cert.sign(privateKey, "SHA256withRSA");
+
+        return cert;
+    }
+
+    // Function to convert certificate to PEM format
+    public static String convertCertificateToPEM(Certificate certificate) throws CertificateEncodingException {
+        Base64.Encoder encoder = Base64.getMimeEncoder(64, new byte[]{'\n'});
+        String encodedCert = encoder.encodeToString(certificate.getEncoded());
+
+        return "-----BEGIN CERTIFICATE-----\n" + encodedCert + "\n-----END CERTIFICATE-----";
+    }

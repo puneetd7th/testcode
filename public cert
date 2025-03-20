@@ -72,3 +72,34 @@ public static void main(String[] args) throws Exception {
 
         return "-----BEGIN CERTIFICATE-----\n" + encodedCert + "\n-----END CERTIFICATE-----";
     }
+
+---------------------------------
+
+
+long validity = 365 * 24 * 60 * 60 * 1000L; // 1 Year Validity
+        Date startDate = new Date();
+        Date expiryDate = new Date(startDate.getTime() + validity);
+        BigInteger serialNumber = new BigInteger(64, new SecureRandom());
+
+        X500Name issuer = new X500Name("CN=MySelfSignedCert");
+        X500Name subject = issuer; // Same as issuer for self-signed
+
+        // Generate certificate using Bouncy Castle
+        JcaX509v3CertificateBuilder certBuilder = new JcaX509v3CertificateBuilder(
+                issuer,
+                serialNumber,
+                startDate,
+                expiryDate,
+                subject,
+                publicKey
+        );
+
+        // Sign the certificate with the private key
+        ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA").build(privateKey);
+        X509CertificateHolder certHolder = certBuilder.build(signer);
+
+        // Convert to X.509 certificate
+        X509Certificate certificate = new JcaX509CertificateConverter().getCertificate(certHolder);
+
+        // Return certificate as a byte array
+        return certificate.getEncoded();

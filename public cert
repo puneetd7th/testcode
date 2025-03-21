@@ -103,3 +103,76 @@ long validity = 365 * 24 * 60 * 60 * 1000L; // 1 Year Validity
 
         // Return certificate as a byte array
         return certificate.getEncoded();
+
+
+------------------------
+
+ private KmsClient kmsClient;
+    private KeyFactory keyFactory;
+    
+    private static final String PUBLIC_KEY_PEM = "-----BEGIN PUBLIC KEY-----\n" +
+            "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7lUJKf..." + // (Truncated)
+            "-----END PUBLIC KEY-----";
+    
+    private static final String PRIVATE_KEY_PEM = "-----BEGIN PRIVATE KEY-----\n" +
+            "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC..." + // (Truncated)
+            "-----END PRIVATE KEY-----";
+
+    @BeforeEach
+    void setUp() throws Exception {
+        kmsClient = mock(KmsClient.class);
+        keyFactory = mock(KeyFactory.class);
+    }
+
+    @Test
+    void testGenerateSelfSignedCertificate() throws Exception {
+        // Step 1: Convert PEM String to Key Objects
+        PublicKey mockPublicKey = loadPublicKeyFromPem(PUBLIC_KEY_PEM);
+        PrivateKey mockPrivateKey = loadPrivateKeyFromPem(PRIVATE_KEY_PEM);
+
+        // Step 2: Mock KeyFactory Behavior
+        when(keyFactory.generatePublic(any(X509EncodedKeySpec.class))).thenReturn(mockPublicKey);
+        when(keyFactory.generatePrivate(any(PKCS8EncodedKeySpec.class))).thenReturn(mockPrivateKey);
+
+        // Step 3: Mock AWS KMS GenerateDataKeyPairWithoutPlaintextResponse
+        ByteBuffer mockPublicKeyBuffer = ByteBuffer.wrap(mockPublicKey.getEncoded());
+        ByteBuffer mockEncryptedPrivateKeyBuffer = ByteBuffer.wrap(mockPrivateKey.getEncoded());
+
+        GenerateDataKeyPairWithoutPlaintextResponse mockResponse = GenerateDataKeyPairWithoutPlaintextResponse.builder()
+                .publicKey(mockPublicKeyBuffer)
+                .privateKeyCiphertextBlob(mockEncryptedPrivateKeyBuffer)
+                .build();
+
+        when(kmsClient.generateDataKeyPairWithoutPlaintext(any(GenerateDataKeyPairWithoutPlaintextRequest.class)))
+                .thenReturn(mockResponse);
+
+        // Step 4: Mock AWS KMS DecryptResponse
+        DecryptResponse mockDecryptResponse = DecryptResponse.builder()
+                .plaintext(ByteBuffer.wrap(mockPrivateKey.getEncoded()))
+                .build();
+
+        when(kmsClient.decrypt(any(DecryptRequest.class))).thenReturn(mockDecryptResponse);
+
+        // Step 5: Call the function and verify result
+        byte[] certBytes = KmsSelfSignedCertificateGenerator.generateSelfSignedCertificate(mockPublicKey, mockPrivateKey);
+        assertNotNull(certBytes);
+        assertTrue(certBytes.length > 0);
+    }
+
+    // Helper method to convert PEM string to PublicKey
+    private PublicKey loadPublicKeyFromPem(String pem) throws Exception {
+        PemReader pemReader = new PemReader(new StringReader(pem));
+        PemObject pemObject = pemReader.readPemObject();
+        byte[] keyBytes = pemObject.getContent();
+        pemReader.close();
+        return KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(keyBytes));
+    }
+
+    // Helper method to convert PEM string to PrivateKey
+    private PrivateKey loadPrivateKeyFromPem(String pem) throws Exception {
+        PemReader pemReader = new PemReader(new StringReader(pem));
+        PemObject pemObject = pemReader.readPemObject();
+        byte[] keyBytes = pemObject.getContent();
+        pemReader.close();
+        return KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(keyBytes));
+    }

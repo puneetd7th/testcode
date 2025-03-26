@@ -186,3 +186,19 @@ PKCS10CertificationRequestBuilder csrBuilder = new JcaPKCS10CertificationRequest
 
         // Return CSR as byte array
         return csr.getEncoded();
+
+
+-----
+private static String encodeToPEM(byte[] csrBytes) {
+        String base64Csr = Base64.getEncoder().encodeToString(csrBytes);
+        StringBuilder pem = new StringBuilder();
+        pem.append("-----BEGIN CERTIFICATE REQUEST-----\n");
+        // Format the Base64 output (64-character line breaks)
+        int index = 0;
+        while (index < base64Csr.length()) {
+            pem.append(base64Csr, index, Math.min(index + 64, base64Csr.length())).append("\n");
+            index += 64;
+        }
+        pem.append("-----END CERTIFICATE REQUEST-----");
+        return pem.toString();
+    }

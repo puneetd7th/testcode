@@ -176,3 +176,13 @@ long validity = 365 * 24 * 60 * 60 * 1000L; // 1 Year Validity
         pemReader.close();
         return KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(keyBytes));
     }
+----------------------
+
+PKCS10CertificationRequestBuilder csrBuilder = new JcaPKCS10CertificationRequestBuilder(subject, publicKey);
+
+        // Sign the CSR with private key
+        ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA").build(privateKey);
+        PKCS10CertificationRequest csr = csrBuilder.build(signer);
+
+        // Return CSR as byte array
+        return csr.getEncoded();

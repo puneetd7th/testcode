@@ -1,0 +1,22 @@
+@startuml
+title Hybrid Encryption API Flow - Send Encrypted Private Key
+
+actor Client
+participant Server
+
+Client -> Server: Send RSA Public Key
+
+note right of Server
+1. Generate AES symmetric key
+2. Generate or load RSA Private Key
+3. Encrypt Private Key with AES key
+4. Encrypt AES key with Client's RSA Public Key
+end note
+
+Server -> Client: Return Encrypted Private Key\nand Encrypted AES Key
+note left of Client
+Client can now:
+1. Decrypt AES key using its RSA Private Key
+2. Decrypt Private Key using AES key
+end note
+@enduml

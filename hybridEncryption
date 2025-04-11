@@ -1,0 +1,78 @@
+import javax.crypto.*;
+import javax.crypto.spec.SecretKeySpec;
+import java.security.*;
+import java.security.spec.*;
+import java.util.Base64;
+
+public class HybridEncryptionExample {
+
+    // Simulate client sending public key
+    public static KeyPair generateClientKeyPair() throws Exception {
+        KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
+        keyGen.initialize(2048); // Can also use 4096
+        return keyGen.generateKeyPair();
+    }
+
+    public static SecretKey generateAESKey() throws Exception {
+        KeyGenerator keyGen = KeyGenerator.getInstance("AES");
+        keyGen.init(256); // Use 128 if 256 is not supported
+        return keyGen.generateKey();
+    }
+
+    public static byte[] encryptWithAES(SecretKey aesKey, byte[] data) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES");
+        cipher.init(Cipher.ENCRYPT_MODE, aesKey);
+        return cipher.doFinal(data);
+    }
+
+    public static byte[] encryptWithRSA(PublicKey publicKey, byte[] data) throws Exception {
+        Cipher cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
+        cipher.init(Cipher.ENCRYPT_MODE, publicKey);
+        return cipher.doFinal(data);
+    }
+
+    public static void main(String[] args) throws Exception {
+        // Step 1: Simulate Client's RSA Public Key
+        KeyPair clientKeyPair = generateClientKeyPair();
+        PublicKey clientPublicKey = clientKeyPair.getPublic();
+        PrivateKey clientPrivateKey = clientKeyPair.getPrivate();
+
+        // Step 2: Generate AES Key
+        SecretKey aesKey = generateAESKey();
+
+        // Step 3: Generate Private Key to be sent (we simulate one)
+        KeyPair privateKeyToSend = generateClientKeyPair(); // Simulated RSA key to encrypt and send
+        PrivateKey privateKey = privateKeyToSend.getPrivate();
+        byte[] privateKeyBytes = privateKey.getEncoded(); // DER format
+
+        // Step 4: Encrypt private key using AES key
+        byte[] encryptedPrivateKey = encryptWithAES(aesKey, privateKeyBytes);
+
+        // Step 5: Encrypt AES key using client public key
+        byte[] encryptedAESKey = encryptWithRSA(clientPublicKey, aesKey.getEncoded());
+
+        // =======================
+        // Output
+        System.out.println("Encrypted Private Key (Base64):");
+        System.out.println(Base64.getEncoder().encodeToString(encryptedPrivateKey));
+
+        System.out.println("\nEncrypted AES Key (Base64):");
+        System.out.println(Base64.getEncoder().encodeToString(encryptedAESKey));
+
+        // ========== Optional =============
+        // Simulate client decrypting AES key
+        Cipher rsaDecrypt = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
+        rsaDecrypt.init(Cipher.DECRYPT_MODE, clientPrivateKey);
+        byte[] decryptedAESKeyBytes = rsaDecrypt.doFinal(encryptedAESKey);
+
+        SecretKey originalAESKey = new SecretKeySpec(decryptedAESKeyBytes, "AES");
+
+        // Simulate client decrypting private key
+        Cipher aesDecrypt = Cipher.getInstance("AES");
+        aesDecrypt.init(Cipher.DECRYPT_MODE, originalAESKey);
+        byte[] decryptedPrivateKey = aesDecrypt.doFinal(encryptedPrivateKey);
+
+        System.out.println("\nDecrypted Private Key matches: " +
+                java.util.Arrays.equals(privateKeyBytes, decryptedPrivateKey));
+    }
+}

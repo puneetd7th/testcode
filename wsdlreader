@@ -1,0 +1,82 @@
+import javax.wsdl.*;
+import javax.wsdl.factory.WSDLFactory;
+import javax.wsdl.xml.WSDLReader;
+import java.io.File;
+import java.util.*;
+
+public class WsdlOperationLister {
+
+    public static void main(String[] args) {
+        String wsdlDirectoryPath = "path/to/your/wsdls"; // 🔁 Replace with your directory path
+        File dir = new File(wsdlDirectoryPath);
+
+        if (!dir.exists() || !dir.isDirectory()) {
+            System.out.println("Invalid directory path!");
+            return;
+        }
+
+        List<File> wsdlFiles = new ArrayList<>();
+        findAllWSDLFiles(dir, wsdlFiles);
+
+        if (wsdlFiles.isEmpty()) {
+            System.out.println("No WSDL files found.");
+            return;
+        }
+
+        for (File wsdlFile : wsdlFiles) {
+            System.out.println("\n📄 WSDL File: " + wsdlFile.getAbsolutePath());
+            try {
+                WSDLFactory factory = WSDLFactory.newInstance();
+                WSDLReader reader = factory.newWSDLReader();
+                reader.setFeature("javax.wsdl.verbose", false);
+                Definition definition = reader.readWSDL(wsdlFile.getAbsolutePath());
+
+                Map<String, List<String>> endpointOperations = new LinkedHashMap<>();
+
+                Map services = definition.getServices();
+                for (Object serviceObj : services.values()) {
+                    Service service = (Service) serviceObj;
+                    Map ports = service.getPorts();
+
+                    for (Object portObj : ports.values()) {
+                        Port port = (Port) portObj;
+                        String endpoint = port.getName();
+                        Binding binding = port.getBinding();
+
+                        List<String> operations = new ArrayList<>();
+                        List<BindingOperation> bindingOperations = binding.getBindingOperations();
+                        for (BindingOperation op : bindingOperations) {
+                            operations.add(op.getName());
+                        }
+                        endpointOperations.put(endpoint, operations);
+                    }
+                }
+
+                for (Map.Entry<String, List<String>> entry : endpointOperations.entrySet()) {
+                    System.out.println("🔹 Endpoint: " + entry.getKey());
+                    for (String op : entry.getValue()) {
+                        System.out.println("   - Operation: " + op);
+                    }
+                }
+
+            } catch (Exception e) {
+                System.err.println("Error parsing WSDL: " + wsdlFile.getName());
+                e.printStackTrace();
+            }
+        }
+    }
+
+    // Utility method to find all WSDL files recursively
+    private static void findAllWSDLFiles(File dir, List<File> wsdlFiles) {
+        File[] files = dir.listFiles();
+        if (files == null) return;
+
+        for (File f : files) {
+            if (f.isDirectory()) {
+                findAllWSDLFiles(f, wsdlFiles);
+            } else if (f.getName().toLowerCase().endsWith(".wsdl")) {
+                wsdlFiles.add(f);
+            }
+        }
+    }
+}

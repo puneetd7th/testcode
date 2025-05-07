@@ -1,22 +1,39 @@
 @startuml
+skinparam dpi 150
+skinparam ArrowColor Black
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam Shadowing false
+skinparam ParticipantFontSize 14
+skinparam DefaultTextAlignment center
+
 actor "Event Bridge" as EB
-participant "Key Rotation Lambda" as Lambda
-participant "AWS KMS" as KMS
-database "S3 Bucket" as S3
-participant "CKMS API" as CKMS
+participant "Key Rotation Lambda\n(AWS Lambda Function)" as Lambda
+participant "AWS KMS\n(Key Management Service)" as KMS
+participant "CKMS API\n(Certificate Key Management System)" as CKMS
+database "S3 Bucket\n(Storage for Certificate Details)" as S3
 
-EB -> Lambda : Trigger (every 11 months)
-Lambda -> KMS : Generate RSA key pair
-Lambda -> Lambda : Create CSR file
+== Scheduled Trigger ==
+EB -> Lambda : Trigger Lambda\n(Every 11 months)
 
-Lambda -> CKMS : Check certificate by CN name
-alt Certificate doesn't exist
-    Lambda -> CKMS : Add new certificate
-else Certificate exists
-    Lambda -> CKMS : Renew existing certificate
+== Key Generation ==
+Lambda -> KMS : Generate RSA Key Pair\n(Public + Private Key)
+
+== CSR Creation ==
+Lambda -> Lambda : Create CSR File\n(Using generated key)
+
+== Certificate Check ==
+Lambda -> CKMS : Check Certificate\nby CN Name
+alt Certificate Does NOT Exist
+    Lambda -> CKMS : Add New Certificate\n(CSR + Metadata)
+else Certificate Exists
+    Lambda -> CKMS : Renew Existing Certificate\n(CSR + Existing CN)
 end
 
-Lambda -> CKMS : Fetch latest certificate info by CN
-Lambda -> S3 : Save certificate details
+== Fetch Latest Certificate Info ==
+Lambda -> CKMS : Get Latest Certificate\n(Using CN Name)
+
+== Store in S3 ==
+Lambda -> S3 : Save Certificate Details\n(Public Key, Metadata, etc.)
 
 @enduml

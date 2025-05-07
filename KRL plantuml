@@ -1,0 +1,22 @@
+@startuml
+actor "Event Bridge" as EB
+participant "Key Rotation Lambda" as Lambda
+participant "AWS KMS" as KMS
+database "S3 Bucket" as S3
+participant "CKMS API" as CKMS
+
+EB -> Lambda : Trigger (every 11 months)
+Lambda -> KMS : Generate RSA key pair
+Lambda -> Lambda : Create CSR file
+
+Lambda -> CKMS : Check certificate by CN name
+alt Certificate doesn't exist
+    Lambda -> CKMS : Add new certificate
+else Certificate exists
+    Lambda -> CKMS : Renew existing certificate
+end
+
+Lambda -> CKMS : Fetch latest certificate info by CN
+Lambda -> S3 : Save certificate details
+
+@enduml

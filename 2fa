@@ -1,0 +1,158 @@
+# Generate private key
+openssl genrsa -out private_key.pem 2048
+
+# Extract public key
+openssl rsa -in private_key.pem -pubout -out public_key.pem
+
+
+
+import java.security.*;
+import java.util.Base64;
+
+public class RSASignatureUtil {
+
+    public static String sign(String data, PrivateKey privateKey) throws Exception {
+        Signature privateSignature = Signature.getInstance("SHA256withRSA");
+        privateSignature.initSign(privateKey);
+        privateSignature.update(data.getBytes());
+        byte[] signature = privateSignature.sign();
+        return Base64.getEncoder().encodeToString(signature);
+    }
+
+    public static boolean verify(String data, String signature, PublicKey publicKey) throws Exception {
+        Signature publicSignature = Signature.getInstance("SHA256withRSA");
+        publicSignature.initVerify(publicKey);
+        publicSignature.update(data.getBytes());
+        byte[] signatureBytes = Base64.getDecoder().decode(signature);
+        return publicSignature.verify(signatureBytes);
+    }
+}
+
+-------------------------------
+
+@RestController
+@RequestMapping("/api/2fa")
+public class TwoFactorController {
+
+    private final SecureRandom secureRandom = new SecureRandom();
+    private final Map<String, Challenge> challengeStore = new ConcurrentHashMap<>();
+
+    @GetMapping("/generate")
+    public ChallengeResponse generateChallenge(HttpSession session) {
+        int correctCode = secureRandom.nextInt(90) + 10;
+
+        Set<Integer> codes = new HashSet<>();
+        codes.add(correctCode);
+        while (codes.size() < 3) {
+            codes.add(secureRandom.nextInt(90) + 10);
+        }
+        List<Integer> options = new ArrayList<>(codes);
+        Collections.shuffle(options);
+
+        String challengeId = UUID.randomUUID().toString();
+
+        // Save in session or Redis
+        Challenge challenge = new Challenge(challengeId, correctCode, System.currentTimeMillis() + 2 * 60 * 1000);
+        challengeStore.put(challengeId, challenge);
+
+        // Only send options to mobile
+        return new ChallengeResponse(challengeId, options);
+    }
+
+    @PostMapping("/verify")
+    public ResponseEntity<String> verifyCode(@RequestBody SignedResponse request) throws Exception {
+        Challenge challenge = challengeStore.get(request.getChallengeId());
+        if (challenge == null || challenge.expired()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Challenge expired or invalid");
+        }
+
+        // Signature verification
+        String data = request.getChallengeId() + ":" + request.getSelectedCode();
+        PublicKey publicKey = KeyLoader.loadPublicKey(); // Implement this
+        boolean validSignature = RSASignatureUtil.verify(data, request.getSignature(), publicKey);
+
+        if (!validSignature) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Invalid signature");
+        }
+
+        if (request.getSelectedCode() != challenge.getCorrectCode()) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Wrong code");
+        }
+
+        // Optional: Remove used challenge
+        challengeStore.remove(request.getChallengeId());
+
+        return ResponseEntity.ok("Verified");
+    }
+}
+
+-------------------------------
+
+public class Challenge {
+    private final String id;
+    private final int correctCode;
+    private final long expiresAt;
+
+    public Challenge(String id, int correctCode, long expiresAt) {
+        this.id = id;
+        this.correctCode = correctCode;
+        this.expiresAt = expiresAt;
+    }
+
+    public boolean expired() {
+        return System.currentTimeMillis() > expiresAt;
+    }
+
+    public int getCorrectCode() {
+        return correctCode;
+    }
+
+    public String getId() {
+        return id;
+    }
+}
+
+public class ChallengeResponse {
+    private final String challengeId;
+    private final List<Integer> options;
+
+    public ChallengeResponse(String challengeId, List<Integer> options) {
+        this.challengeId = challengeId;
+        this.options = options;
+    }
+
+    public String getChallengeId() {
+        return challengeId;
+    }
+
+    public List<Integer> getOptions() {
+        return options;
+    }
+}
+
+public class SignedResponse {
+    private String challengeId;
+    private int selectedCode;
+    private String signature;
+
+    // Getters and setters
+}
+
+-------------------------------
+
+public class KeyLoader {
+    public static PublicKey loadPublicKey() throws Exception {
+        String base64Key = "..."; // Load from PEM or config
+        byte[] keyBytes = Base64.getDecoder().decode(base64Key);
+
+        X509EncodedKeySpec spec = new X509EncodedKeySpec(keyBytes);
+        KeyFactory kf = KeyFactory.getInstance("RSA");
+        return kf.generatePublic(spec);
+    }
+}
+
+-------------------------------
+
+
+
+-------------------------------

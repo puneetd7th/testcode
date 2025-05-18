@@ -1,0 +1,178 @@
+Why Use a Nonce?
+A nonce (number used once) is a random value generated per request to ensure uniqueness and freshness.
+
+🔐 Benefits:
+Prevents replay attacks: If an attacker captures the signed payload and resends it later, the server will reject it if the nonce has already been used.
+
+Ensures message uniqueness: Even if the same code is selected twice, the payload will differ because the nonce is different.
+
+Pairs well with expiry: If the attacker uses it quickly, the timestamp adds another protection.
+
+📦 What Will Be Signed?
+The mobile app will sign this structure (as a string):
+
+plaintext
+Copy
+Edit
+challengeId:selectedCode:expiresAt:nonce
+The backend will:
+
+Retrieve challenge details (by challengeId).
+
+Check if nonce matches the one stored.
+
+Check if timestamp is not expired.
+
+Verify the digital signature.
+
+🔧 Updated Spring Boot Code
+1. Challenge Model
+java
+Copy
+Edit
+public class Challenge {
+    private String challengeId;
+    private String correctCode;
+    private List<String> options;
+    private long expiresAt;       // epoch millis
+    private String nonce;         // random per challenge
+    private String userId;
+
+    // constructor, getters, setters
+}
+2. Challenge Generation Endpoint
+java
+Copy
+Edit
+@PostMapping("/generate-challenge")
+public ResponseEntity<Map<String, Object>> generateChallenge(@RequestParam String userId) {
+    SecureRandom random = new SecureRandom();
+
+    // Generate 3 random 3-digit codes
+    List<String> codes = Stream.generate(() -> String.format("%03d", random.nextInt(1000)))
+                               .distinct().limit(3).collect(Collectors.toList());
+
+    // Pick one as the correct answer
+    String correctCode = codes.get(random.nextInt(3));
+
+    String challengeId = UUID.randomUUID().toString();
+    long expiresAt = System.currentTimeMillis() + (60 * 1000); // 1 min expiry
+    String nonce = UUID.randomUUID().toString();
+
+    Challenge challenge = new Challenge(challengeId, correctCode, codes, expiresAt, nonce, userId);
+    challengeStore.put(challengeId, challenge);
+
+    // Send all codes to mobile, correct one will be shown on web
+    Map<String, Object> mobilePayload = Map.of(
+        "challengeId", challengeId,
+        "codes", codes,
+        "expiresAt", expiresAt,
+        "nonce", nonce
+    );
+
+    // Show only the correct code on web (not exposed to user)
+    Map<String, Object> webPayload = Map.of(
+        "codeToDisplay", correctCode
+    );
+
+    // Return both (simulated)
+    return ResponseEntity.ok(Map.of("web", webPayload, "mobile", mobilePayload));
+}
+3. Verification Endpoint
+java
+Copy
+Edit
+@PostMapping("/verify-response")
+public ResponseEntity<String> verifyResponse(@RequestBody VerificationRequest request) throws Exception {
+    Challenge challenge = challengeStore.get(request.getChallengeId());
+    if (challenge == null) return ResponseEntity.status(404).body("Invalid challenge");
+
+    if (System.currentTimeMillis() > challenge.getExpiresAt()) {
+        return ResponseEntity.status(400).body("Challenge expired");
+    }
+
+    if (!challenge.getNonce().equals(request.getNonce())) {
+        return ResponseEntity.status(400).body("Invalid nonce");
+    }
+
+    String payload = String.join(":",
+        challenge.getChallengeId(),
+        request.getSelectedCode(),
+        String.valueOf(challenge.getExpiresAt()),
+        challenge.getNonce()
+    );
+
+    boolean isValid = SignatureUtil.verifySignature(payload, request.getSignature(), request.getPublicKey());
+    if (!isValid) return ResponseEntity.status(400).body("Invalid signature");
+
+    if (!request.getSelectedCode().equals(challenge.getCorrectCode())) {
+        return ResponseEntity.status(400).body("Wrong code");
+    }
+
+    challengeStore.remove(request.getChallengeId()); // Invalidate after use
+    return ResponseEntity.ok("Success");
+}
+4. VerificationRequest DTO
+java
+Copy
+Edit
+public class VerificationRequest {
+    private String challengeId;
+    private String selectedCode;
+    private String signature;
+    private String publicKey;
+    private String nonce;
+
+    // Getters/setters
+}
+5. SignatureUtil (Simplified Example)
+java
+Copy
+Edit
+public class SignatureUtil {
+
+    public static boolean verifySignature(String data, String base64Signature, String base64PublicKey) throws Exception {
+        byte[] publicBytes = Base64.getDecoder().decode(base64PublicKey);
+        X509EncodedKeySpec keySpec = new X509EncodedKeySpec(publicBytes);
+        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+        PublicKey pubKey = keyFactory.generatePublic(keySpec);
+
+        Signature signature = Signature.getInstance("SHA256withRSA");
+        signature.initVerify(pubKey);
+        signature.update(data.getBytes(StandardCharsets.UTF_8));
+
+        return signature.verify(Base64.getDecoder().decode(base64Signature));
+    }
+}
+
+
+---------------------------------------------------------
+
+
+@startuml
+actor User
+participant WebApp
+participant MobileApp
+participant Server
+database ChallengeStore
+
+== Challenge Generation ==
+User -> WebApp : Request login
+WebApp -> Server : POST /generate-challenge
+Server -> Server : Generate codes, select correct
+Server -> ChallengeStore : Store challenge (ID, code, nonce, expiry)
+Server --> WebApp : Return correct code
+Server --> MobileApp : Send all codes, nonce, expiry
+
+== User Interaction ==
+User -> MobileApp : Selects correct code
+MobileApp -> MobileApp : Sign (ID:code:expiry:nonce)
+MobileApp -> Server : POST /verify-response
+
+== Verification ==
+Server -> ChallengeStore : Load challenge by ID
+Server -> Server : Check expiry, nonce, signature
+Server -> Server : Compare selected code
+Server --> MobileApp : Return success or failure
+
+@enduml

@@ -1,0 +1,228 @@
+Full example:
+1. Generate RSA key pair (you can generate once and load from files or generate at startup)
+For simplicity, this example generates RSA keys at startup.
+
+2. Maven dependencies
+xml
+Copy
+Edit
+<dependency>
+  <groupId>io.jsonwebtoken</groupId>
+  <artifactId>jjwt-api</artifactId>
+  <version>0.11.5</version>
+</dependency>
+<dependency>
+  <groupId>io.jsonwebtoken</groupId>
+  <artifactId>jjwt-impl</artifactId>
+  <version>0.11.5</version>
+  <scope>runtime</scope>
+</dependency>
+<dependency>
+  <groupId>io.jsonwebtoken</groupId>
+  <artifactId>jjwt-jackson</artifactId>
+  <version>0.11.5</version>
+  <scope>runtime</scope>
+</dependency>
+3. Spring Boot Controller
+java
+Copy
+Edit
+import io.jsonwebtoken.*;
+import io.jsonwebtoken.security.Keys;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import javax.annotation.PostConstruct;
+import java.security.*;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
+import java.time.Instant;
+import java.util.*;
+
+@RestController
+@RequestMapping("/auth")
+public class JwtChallengeController {
+
+    private RSAPrivateKey privateKey;
+    private RSAPublicKey publicKey;
+
+    @PostConstruct
+    public void initKeys() throws NoSuchAlgorithmException {
+        // Generate RSA Key Pair at startup (you should load keys from secure storage in real apps)
+        KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
+        kpg.initialize(2048);
+        KeyPair kp = kpg.generateKeyPair();
+        privateKey = (RSAPrivateKey) kp.getPrivate();
+        publicKey = (RSAPublicKey) kp.getPublic();
+    }
+
+    // Endpoint to get public key (clients can use it to verify JWT)
+    @GetMapping("/publicKey")
+    public Map<String, String> getPublicKey() {
+        return Map.of(
+            "algorithm", publicKey.getAlgorithm(),
+            "format", publicKey.getFormat(),
+            "encoded", Base64.getEncoder().encodeToString(publicKey.getEncoded())
+        );
+    }
+
+    @PostMapping("/generate-jwt-challenge")
+    public ResponseEntity<JwtChallengeResponse> generateJwtChallenge() {
+        SecureRandom secureRandom = new SecureRandom();
+
+        // Generate 3 unique codes
+        Set<Integer> codes = new HashSet<>();
+        while (codes.size() < 3) {
+            codes.add(100 + secureRandom.nextInt(900));
+        }
+        List<Integer> codeList = new ArrayList<>(codes);
+
+        // Pick a correct code randomly
+        int correctCode = codeList.get(secureRandom.nextInt(3));
+
+        String challengeId = UUID.randomUUID().toString();
+        String nonce = UUID.randomUUID().toString();
+        Instant expiresAt = Instant.now().plusSeconds(60); // expires in 60 seconds
+
+        String jwt = Jwts.builder()
+            .setId(challengeId)
+            .claim("correctCode", correctCode)
+            .claim("nonce", nonce)
+            .setExpiration(Date.from(expiresAt))
+            .signWith(privateKey, SignatureAlgorithm.RS256)
+            .compact();
+
+        JwtChallengeResponse response = new JwtChallengeResponse(jwt, codeList, expiresAt.toEpochMilli());
+
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/verify-jwt-response")
+    public ResponseEntity<String> verifyJwtResponse(@RequestBody JwtVerifyRequest request) {
+        try {
+            // Parse and verify JWT signature and expiration
+            Jws<Claims> jwtClaims = Jwts.parserBuilder()
+                .setSigningKey(publicKey)
+                .build()
+                .parseClaimsJws(request.jwt);
+
+            Claims claims = jwtClaims.getBody();
+
+            int correctCode = claims.get("correctCode", Integer.class);
+            String nonce = claims.get("nonce", String.class);
+            Date expiry = claims.getExpiration();
+
+            if (expiry.before(new Date())) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Challenge expired");
+            }
+
+            // Verify signature from mobile (signed string: jwt + ":" + selectedCode + ":" + nonce)
+            String dataToVerify = request.jwt + ":" + request.selectedCode + ":" + nonce;
+
+            boolean validSignature = SignatureUtil.verifySignature(dataToVerify, request.signature, request.mobilePublicKey);
+
+            if (!validSignature) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid signature");
+            }
+
+            if (request.selectedCode != correctCode) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Incorrect code");
+            }
+
+            return ResponseEntity.ok("Verification successful");
+
+        } catch (JwtException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid JWT token");
+        }
+    }
+
+    // DTO classes
+    public static class JwtChallengeResponse {
+        public String jwt;
+        public List<Integer> codes;
+        public long expiresAtMillis;
+
+        public JwtChallengeResponse(String jwt, List<Integer> codes, long expiresAtMillis) {
+            this.jwt = jwt;
+            this.codes = codes;
+            this.expiresAtMillis = expiresAtMillis;
+        }
+    }
+
+    public static class JwtVerifyRequest {
+        public String jwt;
+        public int selectedCode;
+        public String signature;
+        public PublicKey mobilePublicKey;
+    }
+}
+4. SignatureUtil (for mobile signature verification)
+java
+Copy
+Edit
+import java.security.PublicKey;
+import java.security.Signature;
+import java.util.Base64;
+
+public class SignatureUtil {
+
+    public static boolean verifySignature(String data, String base64Signature, PublicKey publicKey) {
+        try {
+            Signature sig = Signature.getInstance("SHA256withRSA");
+            sig.initVerify(publicKey);
+            sig.update(data.getBytes());
+            byte[] signatureBytes = Base64.getDecoder().decode(base64Signature);
+            return sig.verify(signatureBytes);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+}
+Summary
+The JWT is signed with your RSA private key (RS256).
+
+The server publishes the RSA public key for JWT verification (optional, or you keep it private).
+
+Mobile signs the data (jwt + ":" + selectedCode + ":" + nonce) with their private key.
+
+Server verifies mobile signature with mobile public key.
+
+The system is stateless regarding challenges (no DB needed).
+
+
+-----------------------------
+
+@startuml
+actor User
+participant "Web Client" as Web
+participant "Mobile App" as Mobile
+participant "Spring Boot Server" as Server
+
+== Generate Challenge ==
+Web -> Server: POST /auth/generate-jwt-challenge
+Server -> Server: Generate 3 codes\nSelect correct code\nCreate nonce\nGenerate JWT signed with RSA private key\nEmbed correctCode + nonce + expiry in JWT
+Server --> Web: Response { JWT, 3 codes, expiry timestamp }
+
+== User Interaction ==
+Web -> User: Display 3 codes
+User -> Mobile: Select correct code from mobile UI
+
+== Mobile Signing ==
+Mobile -> Mobile: Concatenate data:\n"JWT:selectedCode:nonce"
+Mobile -> Mobile: Sign data with mobile's private RSA key
+Mobile --> Server: POST /auth/verify-jwt-response\n{ JWT, selectedCode, signature, mobilePublicKey }
+
+== Verification ==
+Server -> Server: Parse JWT and verify signature using server's public key
+Server -> Server: Validate expiry, extract nonce and correctCode
+Server -> Server: Verify mobile signature using mobilePublicKey
+Server -> Server: Compare selectedCode with correctCode
+
+alt Verification successful
+    Server --> Mobile: 200 OK "Verification successful"
+else Verification failed
+    Server --> Mobile: 400 Bad Request\n"Invalid JWT, Signature, or Code"
+end
+@enduml

@@ -1,0 +1,371 @@
+How the Flow Works
+1. Challenge Generation (Stateless)
+The server creates 3 random codes, one of which is correct.
+
+The correct code is stored in-memory (or Redis) with a nonce and expiry time.
+
+A JWT is created containing only the nonce and expiry (but NOT the correct code).
+
+This JWT is signed with RSA (asymmetric) and returned to the client along with the 3 codes (shuffled).
+
+Only the nonce and expiry are in the JWT to preserve privacy and security.
+
+2. Client Selection & Signing
+The user selects one code on mobile.
+
+The mobile signs:
+token + ":" + selectedCode + ":" + nonce
+using their private key.
+
+The mobile then sends:
+
+The original token (JWT)
+
+Selected code
+
+Signature
+
+Their public key
+
+3. Backend Verification
+JWT is verified for authenticity (RSA signature) and expiry.
+
+Nonce is extracted and used to retrieve the correct code from store.
+
+Signature from mobile is verified using the provided public key.
+
+If everything is valid and the selected code matches the correct one: ✅ Success.
+
+🔐 Why Use JWT with RSA?
+JWT ensures tamper-proof payload (nonce + expiry).
+
+RSA (asymmetric) avoids sharing secret keys between server and client.
+
+Stateless means server doesn’t need to persist anything in the token, only nonce mapping in memory.
+
+🌀 What Role Does Nonce Play?
+Acts as a unique challenge ID.
+
+Prevents replay attacks.
+
+Ties the JWT, user response, and stored challenge together.
+
+On verification, it ensures:
+
+The challenge is still valid (not expired).
+
+The correct answer is matched using nonce, not based on anything in the token.
+
+📈 PlantUML Sequence Diagram
+plantuml
+Copy
+Edit
+@startuml
+actor User
+participant WebApp
+participant MobileApp
+participant Backend
+
+User -> WebApp : Request 2FA challenge
+WebApp -> Backend : GET /api/challenge/generate
+Backend -> Backend : Generate correct code, nonce, expiry
+Backend -> Backend : Store correctCode w/ nonce
+Backend -> Backend : Create JWT (nonce, expiry) signed w/ RSA
+Backend --> WebApp : Return {codes, JWT}
+WebApp -> User : Show code options
+User -> MobileApp : Enter selected code
+MobileApp -> MobileApp : Sign (token:selectedCode:nonce) w/ private key
+MobileApp -> Backend : POST /api/verify {token, selectedCode, signature, pubKey}
+Backend -> Backend : Verify JWT (RSA + expiry)
+Backend -> Backend : Extract nonce from JWT
+Backend -> Backend : Get correctCode from store via nonce
+Backend -> Backend : Verify signature using public key
+Backend --> MobileApp : Verification Success / Failure
+@enduml
+
+
+-----------------------------------
+
+// Secure 2FA Challenge - Stateless with RSA JWT, Nonce, and Backend-stored Correct Code with Expiry
+
+// 1. === ChallengeController.java ===
+
+@RestController
+@RequestMapping("/api/challenge")
+public class ChallengeController {
+
+    @Autowired
+    private RSAKeyProvider keyProvider;
+
+    @Autowired
+    private ChallengeStore challengeStore;
+
+    @GetMapping("/generate")
+    public ResponseEntity<Map<String, Object>> generateChallenge() {
+        SecureRandom random = new SecureRandom();
+        int correctCode = random.nextInt(900) + 100;
+        int wrong1 = correctCode;
+        int wrong2 = correctCode;
+        while (wrong1 == correctCode) wrong1 = random.nextInt(900) + 100;
+        while (wrong2 == correctCode || wrong2 == wrong1) wrong2 = random.nextInt(900) + 100;
+
+        List<Integer> codes = Arrays.asList(correctCode, wrong1, wrong2);
+        Collections.shuffle(codes);
+
+        String nonce = UUID.randomUUID().toString();
+        Instant expiry = Instant.now().plusSeconds(300);
+
+        // Save correctCode mapped to nonce with expiry
+        challengeStore.storeChallenge(nonce, correctCode, expiry);
+
+        String jwt = JWT.create()
+            .withClaim("nonce", nonce)
+            .withExpiresAt(Date.from(expiry))
+            .sign(Algorithm.RSA256(keyProvider.getPublicKey(), keyProvider.getPrivateKey()));
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("codes", codes);
+        response.put("token", jwt);
+
+        return ResponseEntity.ok(response);
+    }
+}
+
+
+// 2. === VerificationController.java ===
+
+@RestController
+@RequestMapping("/api/verify")
+public class VerificationController {
+
+    @Autowired
+    private RSAKeyProvider keyProvider;
+
+    @Autowired
+    private ChallengeStore challengeStore;
+
+    @PostMapping
+    public ResponseEntity<String> verify(@RequestBody VerificationRequest request) {
+        try {
+            DecodedJWT jwt = JWT.require(Algorithm.RSA256(keyProvider.getPublicKey(), keyProvider.getPrivateKey()))
+                    .build().verify(request.getToken());
+
+            String nonce = jwt.getClaim("nonce").asString();
+            if (nonce == null) return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid token");
+
+            // Validate signature
+            Signature sig = Signature.getInstance("SHA256withRSA");
+            sig.initVerify(getPublicKeyFromPEM(request.getMobilePublicKey()));
+            String signedPayload = request.getToken() + ":" + request.getSelectedCode() + ":" + nonce;
+            sig.update(signedPayload.getBytes(StandardCharsets.UTF_8));
+
+            boolean isValid = sig.verify(Base64.getDecoder().decode(request.getSignature()));
+            if (!isValid) return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid signature");
+
+            ChallengeEntry entry = challengeStore.getChallenge(nonce);
+            if (entry == null || entry.getExpiry().isBefore(Instant.now())) {
+                challengeStore.removeChallenge(nonce);
+                return ResponseEntity.status(HttpStatus.GONE).body("Challenge expired");
+            }
+
+            if (Objects.equals(entry.getCorrectCode(), request.getSelectedCode())) {
+                challengeStore.removeChallenge(nonce);
+                return ResponseEntity.ok("Verification successful");
+            } else {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Incorrect code");
+            }
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error: " + e.getMessage());
+        }
+    }
+
+    private PublicKey getPublicKeyFromPEM(String pem) throws Exception {
+        String cleanPem = pem.replaceAll("-----\\w+ PRIVATE KEY-----", "").replaceAll("\\s", "");
+        byte[] decoded = Base64.getDecoder().decode(cleanPem);
+        X509EncodedKeySpec spec = new X509EncodedKeySpec(decoded);
+        KeyFactory kf = KeyFactory.getInstance("RSA");
+        return kf.generatePublic(spec);
+    }
+}
+
+
+// 3. === VerificationRequest.java ===
+
+@Data
+public class VerificationRequest {
+    private String token;
+    private Integer selectedCode;
+    private String signature;
+    private String mobilePublicKey; // PEM format
+}
+
+
+// 4. === RSAKeyProvider.java ===
+
+@Component
+public class RSAKeyProvider {
+    private KeyPair keyPair;
+
+    public RSAKeyProvider() throws Exception {
+        KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
+        keyGen.initialize(2048);
+        this.keyPair = keyGen.generateKeyPair();
+    }
+
+    public RSAPublicKey getPublicKey() {
+        return (RSAPublicKey) keyPair.getPublic();
+    }
+
+    public RSAPrivateKey getPrivateKey() {
+        return (RSAPrivateKey) keyPair.getPrivate();
+    }
+}
+
+
+// 5. === ChallengeStore.java ===
+
+@Component
+public class ChallengeStore {
+    private final Map<String, ChallengeEntry> challengeMap = new ConcurrentHashMap<>();
+
+    public void storeChallenge(String nonce, int correctCode, Instant expiry) {
+        challengeMap.put(nonce, new ChallengeEntry(correctCode, expiry));
+    }
+
+    public ChallengeEntry getChallenge(String nonce) {
+        return challengeMap.get(nonce);
+    }
+
+    public void removeChallenge(String nonce) {
+        challengeMap.remove(nonce);
+    }
+}
+
+
+// 6. === ChallengeEntry.java ===
+
+@Data
+@AllArgsConstructor
+public class ChallengeEntry {
+    private int correctCode;
+    private Instant expiry;
+}
+
+
+---------------------------------\
+
+
+Here's a complete Java mobile-side simulation that:
+
+Calls the backend to get the challenge (/api/challenge/generate).
+
+Parses the 3 shuffled codes and JWT.
+
+Extracts the nonce from the JWT.
+
+Simulates user selecting the correct code (if testing, we can assume the first is correct).
+
+Signs the payload token:selectedCode:nonce with the mobile's private RSA key.
+
+
+
+
+import com.auth0.jwt.JWT;
+import com.auth0.jwt.interfaces.DecodedJWT;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
+
+import java.io.*;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.security.*;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.util.*;
+
+public class MobileChallengeClient {
+
+    private static final ObjectMapper mapper = new ObjectMapper();
+
+    public static void main(String[] args) throws Exception {
+        // === Load keys ===
+        String privateKeyPem = Files.readString(Paths.get("mobile_private_key.pem"));
+        String publicKeyPem = Files.readString(Paths.get("mobile_public_key.pem"));
+        PrivateKey privateKey = loadPrivateKey(privateKeyPem);
+
+        // === Step 1: Get challenge from server ===
+        Map<String, Object> challenge = fetchChallenge();
+        List<Integer> codes = (List<Integer>) challenge.get("codes");
+        String token = (String) challenge.get("token");
+
+        System.out.println("Received codes: " + codes);
+        System.out.println("JWT Token: " + token);
+
+        // === Step 2: Extract nonce from JWT ===
+        DecodedJWT decodedJWT = JWT.decode(token);
+        String nonce = decodedJWT.getClaim("nonce").asString();
+
+        System.out.println("Extracted nonce: " + nonce);
+
+        // === Step 3: Simulate selecting the correct code ===
+        int selectedCode = codes.get(0); // Simulate selecting the first one
+
+        // === Step 4: Create signature ===
+        String payload = token + ":" + selectedCode + ":" + nonce;
+        String signature = signPayload(payload, privateKey);
+
+        // === Step 5: Send signed verification request ===
+        sendVerification(token, selectedCode, signature, publicKeyPem);
+    }
+
+    private static Map<String, Object> fetchChallenge() throws IOException {
+        URL url = new URL("http://localhost:8080/api/challenge/generate");
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("GET");
+
+        InputStream inputStream = conn.getInputStream();
+        return mapper.readValue(inputStream, new TypeReference<Map<String, Object>>() {});
+    }
+
+    private static String signPayload(String data, PrivateKey privateKey) throws Exception {
+        Signature sig = Signature.getInstance("SHA256withRSA");
+        sig.initSign(privateKey);
+        sig.update(data.getBytes(StandardCharsets.UTF_8));
+        return Base64.getEncoder().encodeToString(sig.sign());
+    }
+
+    private static void sendVerification(String token, int selectedCode, String signature, String publicKeyPem) throws IOException {
+        URL url = new URL("http://localhost:8080/api/verify");
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setDoOutput(true);
+        conn.setRequestMethod("POST");
+        conn.setRequestProperty("Content-Type", "application/json");
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("token", token);
+        body.put("selectedCode", selectedCode);
+        body.put("signature", signature);
+        body.put("mobilePublicKey", publicKeyPem);
+
+        String json = mapper.writeValueAsString(body);
+        try (OutputStream os = conn.getOutputStream()) {
+            os.write(json.getBytes(StandardCharsets.UTF_8));
+        }
+
+        int status = conn.getResponseCode();
+        InputStream responseStream = (status < 400) ? conn.getInputStream() : conn.getErrorStream();
+        String response = new BufferedReader(new InputStreamReader(responseStream)).lines().reduce("", (a, b) -> a + b + "\n");
+
+        System.out.println("Server Response: " + response);
+    }
+
+    private static PrivateKey loadPrivateKey(String pem) throws Exception {
+        String cleanPem = pem.replaceAll("-----\\w+ PRIVATE KEY-----", "").replaceAll("\\s", "");
+        byte[] decoded = Base64.getDecoder().decode(cleanPem);
+        PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(decoded);
+        return KeyFactory.getInstance("RSA").generatePrivate(spec);
+    }
+}

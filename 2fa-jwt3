@@ -1,0 +1,151 @@
+✅ Generate RSA key pair using Java
+java
+Copy
+Edit
+import java.io.FileOutputStream;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.util.Base64;
+
+public class KeyGen {
+    public static void main(String[] args) throws Exception {
+        KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
+        keyGen.initialize(2048);
+        KeyPair pair = keyGen.generateKeyPair();
+
+        try (FileOutputStream pubOut = new FileOutputStream("publicKey.pem");
+             FileOutputStream privOut = new FileOutputStream("privateKey.pem")) {
+            pubOut.write(Base64.getEncoder().encode(pair.getPublic().getEncoded()));
+            privOut.write(Base64.getEncoder().encode(pair.getPrivate().getEncoded()));
+        }
+
+        System.out.println("Keys saved to disk.");
+    }
+}
+💻 Step 2: Client-Side – JWT Generator
+java
+Copy
+Edit
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.security.KeyFactory;
+import java.security.PrivateKey;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.util.Base64;
+import java.util.Date;
+
+public class JwtClient {
+    public static void main(String[] args) throws Exception {
+        byte[] keyBytes = Base64.getDecoder().decode(Files.readAllBytes(Paths.get("privateKey.pem")));
+        PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(keyBytes);
+        PrivateKey privateKey = KeyFactory.getInstance("RSA").generatePrivate(spec);
+
+        String jwt = Jwts.builder()
+                .claim("username", "alice")
+                .setExpiration(new Date(System.currentTimeMillis() + 3600_000)) // 1 hour
+                .signWith(privateKey, SignatureAlgorithm.RS256)
+                .compact();
+
+        System.out.println("JWT: " + jwt);
+    }
+}
+🖥️ Step 3: Server-Side – Spring Boot JWT Validator
+✅ JwtValidationController.java
+java
+Copy
+Edit
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jws;
+import io.jsonwebtoken.JwtException;
+import io.jsonwebtoken.Jwts;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.security.KeyFactory;
+import java.security.PublicKey;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Base64;
+
+@RestController
+public class JwtValidationController {
+
+    @PostMapping("/validate")
+    public ResponseEntity<String> validateJwt(@RequestBody String jwt) {
+        try {
+            PublicKey publicKey = getClientPublicKey();
+            Jws<Claims> claimsJws = Jwts.parserBuilder()
+                    .setSigningKey(publicKey)
+                    .build()
+                    .parseClaimsJws(jwt);
+
+            String username = claimsJws.getBody().get("username", String.class);
+            return ResponseEntity.ok("Valid JWT. Username: " + username);
+        } catch (JwtException e) {
+            return ResponseEntity.badRequest().body("Invalid JWT: " + e.getMessage());
+        }
+    }
+
+    private PublicKey getClientPublicKey() throws Exception {
+        byte[] keyBytes = Base64.getDecoder().decode(Files.readAllBytes(Paths.get("publicKey.pem")));
+        X509EncodedKeySpec spec = new X509EncodedKeySpec(keyBytes);
+        return KeyFactory.getInstance("RSA").generatePublic(spec);
+    }
+}
+🚀 Step 4: Test the End-to-End Flow
+Run KeyGen to create privateKey.pem and publicKey.pem.
+
+Run JwtClient to generate a JWT.
+
+Start your Spring Boot server with the above controller.
+
+Use Postman or curl to send the token to /validate:
+
+bash
+Copy
+Edit
+curl -X POST http://localhost:8080/validate \
+  -H "Content-Type: text/plain" \
+  -d "<paste_your_JWT_here>"
+
+
+
+-----------------------------------
+
+@startuml
+actor Client
+participant "JWT Generator\n(Client Side)" as JWTClient
+participant "Spring Boot Server\n(JWT Validator)" as Server
+database "JWKS Cache" as Cache
+database "JWKS URL (client)" as JWKS
+
+== Key Generation ==
+Client -> JWTClient : Generate RSA key pair
+JWTClient -> JWKS : Publish public key in JWKS format
+
+== JWT Creation ==
+Client -> JWTClient : Create signed JWT (username, expiration)
+JWTClient -> JWTClient : Sign JWT with private key\nInclude 'kid' in header
+JWTClient -> Client : Return signed JWT
+
+== JWT Validation ==
+Client -> Server : Send JWT
+
+alt JWKS in cache AND not expired
+Server -> Cache : Retrieve public key by 'kid'
+else JWKS expired or missing
+Server -> JWKS : Fetch JWKS (HTTPS)
+Server -> Cache : Store keys (expires in 1 day)
+end
+
+Server -> Server : Validate signature using public key
+Server -> Server : Check expiration
+Server -> Server : Extract username
+Server -> Client : Respond with "Valid JWT, username: alice"
+
+@enduml

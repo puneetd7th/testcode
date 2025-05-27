@@ -1,0 +1,37 @@
+@startuml
+title Certificate Key Rotation Flow
+
+actor EventBridge
+participant "Key-Rotation-Lambda" as Lambda
+participant "AWS KMS" as KMS
+database "S3 Bucket" as S3
+participant "CKMSAPI" as CKMS
+
+== Scheduled Trigger ==
+
+EventBridge -> Lambda : Trigger every 330 days\n(customerId, keyAlgorithm)
+
+== Key Pair Generation ==
+
+Lambda -> KMS : Generate RSA Key Pair
+
+== CSR Creation ==
+
+Lambda -> Lambda : Create CSR file with CN including customerId
+
+== Certificate Existence Check ==
+
+Lambda -> CKMS : Check if certificate exists (CN)
+
+alt Certificate does not exist
+    Lambda -> CKMS : Add new certificate (CSR)
+else Certificate exists
+    Lambda -> CKMS : Renew certificate (CSR)
+end
+
+== Certificate Fetch and Save ==
+
+Lambda -> CKMS : Fetch latest certificate info (CN)
+Lambda -> S3 : Save certificate details
+
+@enduml

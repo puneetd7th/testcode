@@ -1,7 +1,7 @@
 "Hi everyone.  I’ll walk you through our automated certificate key rotation process using CKMSAPI for SAML flow"
 
 
-"This process helps us rotate customer certificates every 330 days or any period you like without manual intervention. It’s scalable and customer-specific — and adding a new customer is as simple as creating a new EventBridge rule."
+"This process helps us rotate customer certificates every 330 days or any period you like without manual intervention. It’s customer-specific — and adding a new customer is as simple as creating a new EventBridge rule."
 
 let me show you Step-by-Step Flow using this sequence diagram
 

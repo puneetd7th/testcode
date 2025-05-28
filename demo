@@ -20,7 +20,7 @@ Step 3: Create CSR
 
 Step 4: Check for Existing Certificate
 
-"Then, Lambda checks with o CKMSAPI — to see if a certificate already exists for this customer ID."
+"Then, Lambda checks with CKMSAPI — to see if a certificate already exists for this customer ID."
 
 Step 5: 
 

@@ -1,37 +1,35 @@
 @startuml
-title Certificate Key Rotation Flow with Steps
+!includeurl https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v15.0/Lambda/Lambda.puml
+!includeurl https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v15.0/EventBridge/EventBridge.puml
+!includeurl https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v15.0/KMS/KMS.puml
+!includeurl https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v15.0/S3/S3.puml
+!includeurl https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v15.0/General/User.puml
 
-actor EventBridge
-participant "Key-Rotation-Lambda" as Lambda
-participant "AWS KMS" as KMS
-database "S3 Bucket" as S3
-participant "CKMSAPI" as CKMS
+' Define your custom components
+!define CKMSAPI() rectangle "CKMSAPI" as CKMSAPI
 
-== Scheduled Trigger ==
+title AWS Certificate Key Rotation Flow
 
-1. EventBridge -> Lambda : Step 1: Trigger every 330 days\n(customerId, keyAlgorithm)
+autonumber
 
-== Key Pair Generation ==
+AWSGeneralUser(EventBridge, "EventBridge")
+AWSLambda(Lambda, "Key-Rotation-Lambda")
+AWSKMS(KMS, "AWS KMS")
+AWSS3(S3, "S3 Bucket")
+CKMSAPI()
 
-2. Lambda -> KMS : Step 2: Generate RSA Key Pair
+EventBridge -> Lambda : Trigger every 330 days\n(customerId, keyAlgorithm)
+Lambda -> KMS : Generate RSA Key Pair
+Lambda -> Lambda : Create CSR file (CN includes customerId)
+Lambda -> CKMSAPI : Check if certificate exists
 
-== CSR Creation ==
-
-3. Lambda -> Lambda : Step 3: Create CSR file with CN = customerId
-
-== Certificate Existence Check ==
-
-4. Lambda -> CKMS : Step 4: Check if certificate exists (CN)
-
-alt Step 5: Certificate does not exist
-    5. Lambda -> CKMS : Step 5: Add new certificate (CSR)
-else Step 6: Certificate exists
-    6. Lambda -> CKMS : Step 6: Renew certificate (CSR)
+alt Certificate doesn't exist
+    Lambda -> CKMSAPI : Add new certificate (CSR)
+else Certificate exists
+    Lambda -> CKMSAPI : Renew certificate (CSR)
 end
 
-== Certificate Fetch and Save ==
-
-7. Lambda -> CKMS : Step 7: Fetch latest certificate info (CN)
-8. Lambda -> S3 : Step 8: Save certificate details
+Lambda -> CKMSAPI : Fetch latest certificate info
+Lambda -> S3 : Save certificate details
 
 @enduml

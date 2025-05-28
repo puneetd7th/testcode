@@ -1,35 +1,47 @@
-@startuml
-!includeurl https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v15.0/Lambda/Lambda.puml
-!includeurl https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v15.0/EventBridge/EventBridge.puml
-!includeurl https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v15.0/KMS/KMS.puml
-!includeurl https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v15.0/S3/S3.puml
-!includeurl https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v15.0/General/User.puml
+"Hi everyone.  I’ll walk you through our automated certificate key rotation process usingCKMSAPI."
 
-' Define your custom components
-!define CKMSAPI() rectangle "CKMSAPI" as CKMSAPI
 
-title AWS Certificate Key Rotation Flow
+"This process helps us rotate customer certificates every 330 days without manual intervention. It’s scalable and customer-specific — and adding a new customer is as simple as creating a new EventBridge rule."
 
-autonumber
+let me show you Step-by-Step Flow using this sequence diagram
 
-AWSGeneralUser(EventBridge, "EventBridge")
-AWSLambda(Lambda, "Key-Rotation-Lambda")
-AWSKMS(KMS, "AWS KMS")
-AWSS3(S3, "S3 Bucket")
-CKMSAPI()
+Step 1: Scheduled Trigger
 
-EventBridge -> Lambda : Trigger every 330 days\n(customerId, keyAlgorithm)
-Lambda -> KMS : Generate RSA Key Pair
-Lambda -> Lambda : Create CSR file (CN includes customerId)
-Lambda -> CKMSAPI : Check if certificate exists
+"We begin with AWS EventBridge. It’s configured to trigger our Lambda function every 330 days. It passes mainly two parameters: the customer ID and the key algorithm —  which is  RSA 2048."
 
-alt Certificate doesn't exist
-    Lambda -> CKMSAPI : Add new certificate (CSR)
-else Certificate exists
-    Lambda -> CKMSAPI : Renew certificate (CSR)
-end
+Step 2: Generate Key Pair
 
-Lambda -> CKMSAPI : Fetch latest certificate info
-Lambda -> S3 : Save certificate details
+"Once the Lambda is triggered, it calls AWS KMS to generate a secure RSA key pair. 
+These keys are managed by KMS and never leave the service, ensuring security."
 
-@enduml
+Step 3: Create CSR
+
+"Next, the Lambda function creates a CSR — that’s a Certificate Signing Request. The Common Name in the CSR includes the customer ID, so the certificate will be generated specifically for that customer."
+
+Step 4: Check for Existing Certificate
+
+"Then, Lambda checks with o CKMSAPI — to see if a certificate already exists for this customer ID."
+
+Step 5: 
+
+"If no certificate is found, Lambda calls CKMSAPI to add a new certificate using the CSR. But if a certificate already exists, it instead requests a renewal."
+
+Step 6: Fetch Certificate Info
+
+"After the certificate is created or renewed, Lambda fetches the latest certificate metadata from CKMSAPI to confirm the operation and retrieve the cert details."
+
+Step 7: Save to S3
+
+"Finally, Lambda saves all the certificate information into our S3 bucket.
+
+Now Adding a New Customer
+
+"Now,  this flow is fully reusable. To configure it for a new customer, all we need to do is create a new EventBridge rule."
+
+"You just need to  pass in a different customerId and the algorithm as input."
+
+"That’s it. The same Lambda logic will now rotate certs for this new customer too — no code changes needed."
+
+Thats all from my sise
+
+Thank you  — let me know if you have any questions and any suggestion..

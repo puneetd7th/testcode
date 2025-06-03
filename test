@@ -1,13 +1,7 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<saml2p:AuthnRequest
-	xmlns:saml2p="urn:oasis:names:tc:SAML:2.0:protocol"
-	AssertionConsumerServiceURL="http://localhost:8081/cgi-bin/saml-consumer.py "
-	Destination="https://dev-97323201.okta.com/app/dev-97323201_samlapptest2_1/exknu9m1gfvTnFb7H5d7/sso/saml"
-	ID="saml-project2-123456"
-	IssueInstant="2025-02-14T18:41:20.295Z"
-	ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
-	Version="2.0">
-	<saml2:Issuer
-		xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion">http://localhost:8081/saml-app-test
-	</saml2:Issuer>
-</saml2p:AuthnRequest>
+I need some clarification regarding the step-up authentication flow, specifically around Stronghold token validation:
+
+As part of device validation, there is a step involving the validation of a Stronghold token. For this, does Stronghold expose a JWK endpoint from which Sentry can retrieve the public key to validate the token?
+
+Additionally, I understand that Stronghold will sign the correct PIN while sending it to Sentry. For signature validation, we will also require the public key. Can you please confirm if the same JWK endpoint will be used for this validation as well?
+
+Lastly, could you please confirm what exactly is being signed? We are assuming that it will be a JWT token signed using Stronghold’s private key, and at runtime, it will contain the selected PIN. We plan to extract the PIN after validating the signature on the JWT.

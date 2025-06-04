@@ -1,4 +1,15 @@
-1. ✅ Create the Custom Annotation
+✅ 1. JwtValidatorApplication.java
+java
+Copy
+Edit
+@SpringBootApplication
+@EnableCaching
+public class JwtValidatorApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(JwtValidatorApplication.class, args);
+    }
+}
+✅ 2. ValidateJwt.java
 java
 Copy
 Edit
@@ -10,75 +21,45 @@ import java.lang.annotation.*;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface ValidateJwt {
 }
-2. ✅ Create the Aspect to Intercept the Annotation
+✅ 3. CacheConfig.java (Using ConcurrentMapCacheManager)
 java
 Copy
 Edit
-package com.example.jwtvalidator.aspect;
+package com.example.jwtvalidator.config;
 
-import com.nimbusds.jose.JWSVerifier;
-import com.nimbusds.jose.crypto.RSASSAVerifier;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
+import org.springframework.cache.annotation.CachingConfigurerSupport;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class CacheConfig extends CachingConfigurerSupport {
+
+    @Bean
+    @Override
+    public CacheManager cacheManager() {
+        return new ConcurrentMapCacheManager("jwksCache");
+    }
+}
+✅ 4. JwksService.java
+java
+Copy
+Edit
+package com.example.jwtvalidator.service;
+
 import com.nimbusds.jose.jwk.*;
-import com.nimbusds.jwt.SignedJWT;
-import jakarta.servlet.http.HttpServletRequest;
-import org.aspectj.lang.annotation.Aspect;
-import org.aspectj.lang.annotation.Before;
-import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Component;
-import org.springframework.web.server.ResponseStatusException;
-import org.aspectj.lang.annotation.Pointcut;
-import org.aspectj.lang.JoinPoint;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
-import java.text.ParseException;
-
-@Aspect
-@Component
-public class JwtValidationAspect {
+@Service
+public class JwksService {
 
     private static final String JWKS_URL = "https://your-domain.com/.well-known/jwks.json";
 
-    private final HttpServletRequest request;
-
-    public JwtValidationAspect(HttpServletRequest request) {
-        this.request = request;
-    }
-
-    @Pointcut("@annotation(com.example.jwtvalidator.annotation.ValidateJwt)")
-    public void validateJwtAnnotation() {}
-
-    @Before("validateJwtAnnotation()")
-    public void validateJwt(JoinPoint joinPoint) {
-        try {
-            String header = request.getHeader("Authorization");
-            if (header == null || !header.startsWith("Bearer ")) {
-                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Missing or invalid Authorization header");
-            }
-
-            String token = header.substring(7);
-            SignedJWT signedJWT = SignedJWT.parse(token);
-
-            if (!"RS256".equals(signedJWT.getHeader().getAlgorithm().getName())) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported algorithm");
-            }
-
-            RSAKey publicKey = getPublicKeyFromJwks();
-            JWSVerifier verifier = new RSASSAVerifier(publicKey);
-
-            if (!signedJWT.verify(verifier)) {
-                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid JWT signature");
-            }
-
-            // Optional: You can validate 'exp', 'aud', etc. here if needed
-
-        } catch (ParseException e) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Malformed JWT: " + e.getMessage());
-        } catch (Exception e) {
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "JWT validation error: " + e.getMessage());
-        }
-    }
-
-    private RSAKey getPublicKeyFromJwks() throws Exception {
+    @Cacheable(value = "jwksCache")
+    public RSAKey getPublicKey() throws Exception {
         RestTemplate restTemplate = new RestTemplate();
         String jwksJson = restTemplate.getForObject(JWKS_URL, String.class);
         JWKSet jwkSet = JWKSet.parse(jwksJson);
@@ -95,22 +76,86 @@ public class JwtValidationAspect {
         return (RSAKey) jwk;
     }
 }
-3. ✅ Use the Annotation in Any Controller Method
+✅ 5. JwtValidationAspect.java
 java
 Copy
 Edit
+package com.example.jwtvalidator.aspect;
+
+import com.example.jwtvalidator.annotation.ValidateJwt;
+import com.example.jwtvalidator.service.JwksService;
+import com.nimbusds.jose.JWSVerifier;
+import com.nimbusds.jose.crypto.RSASSAVerifier;
+import com.nimbusds.jwt.SignedJWT;
+import com.nimbusds.jose.jwk.RSAKey;
+import jakarta.servlet.http.HttpServletRequest;
+import org.aspectj.lang.JoinPoint;
+import org.aspectj.lang.annotation.*;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Component;
+import org.springframework.web.server.ResponseStatusException;
+
+@Aspect
+@Component
+public class JwtValidationAspect {
+
+    private final HttpServletRequest request;
+    private final JwksService jwksService;
+
+    public JwtValidationAspect(HttpServletRequest request, JwksService jwksService) {
+        this.request = request;
+        this.jwksService = jwksService;
+    }
+
+    @Before("@annotation(validateJwt)")
+    public void validateJwt(JoinPoint joinPoint, ValidateJwt validateJwt) {
+        try {
+            String header = request.getHeader("Authorization");
+            if (header == null || !header.startsWith("Bearer ")) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Missing or invalid Authorization header");
+            }
+
+            String token = header.substring(7);
+            SignedJWT signedJWT = SignedJWT.parse(token);
+
+            if (!"RS256".equals(signedJWT.getHeader().getAlgorithm().getName())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported algorithm");
+            }
+
+            RSAKey publicKey = jwksService.getPublicKey();
+            JWSVerifier verifier = new RSASSAVerifier(publicKey);
+
+            if (!signedJWT.verify(verifier)) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid JWT signature");
+            }
+
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "JWT validation failed: " + e.getMessage());
+        }
+    }
+}
+✅ 6. SecureController.java
+java
+Copy
+Edit
+package com.example.jwtvalidator.controller;
+
+import com.example.jwtvalidator.annotation.ValidateJwt;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
 @RestController
 @RequestMapping("/api")
 public class SecureController {
 
     @ValidateJwt
-    @GetMapping("/secure-data")
-    public ResponseEntity<String> getSecureData() {
-        return ResponseEntity.ok("This is secured data for valid JWT");
+    @GetMapping("/secure")
+    public ResponseEntity<String> secureData() {
+        return ResponseEntity.ok("This is secured data");
     }
 
     @GetMapping("/public")
-    public ResponseEntity<String> getPublicData() {
+    public ResponseEntity<String> publicData() {
         return ResponseEntity.ok("This is public data");
     }
 }

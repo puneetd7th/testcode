@@ -1,7 +1,41 @@
-I need some clarification regarding the step-up authentication flow, specifically around Stronghold token validation:
+so I created this small utility to clean Bitbucket branches. its a java based desktop applicaton 
 
-As part of device validation, there is a step involving the validation of a Stronghold token. For this, does Stronghold expose a JWK endpoint from which Sentry can retrieve the public key to validate the token?
+Let me quickly walk you through what it does:
 
-Additionally, I understand that Stronghold will sign the correct PIN while sending it to Sentry. For signature validation, we will also require the public key. Can you please confirm if the same JWK endpoint will be used for this validation as well?
+[Switch to your application window and start showcasing features]
 
-Lastly, could you please confirm what exactly is being signed? We are assuming that it will be a JWT token signed using Stronghold’s private key, and at runtime, it will contain the selected PIN. We plan to extract the PIN after validating the signature on the JWT.
+so first when you open this application you will see bitbucket login window
+it rquires your bitbucket credentials. which you can also change later 
+
+after login you need to enter your project url
+
+it will fetch all the repo under the project 
+
+Once a repository is selected, the Branch Listing feature displays all its branches along with important details like:
+
+Branch name
+
+Age in months
+
+Last committer
+
+And the pull request status and the jira id
+
+To make this easier to manage, I’ve included a Filtering option. You can filter branches by:
+
+Age—say, older than X months
+
+Branch type like feature, master, or release
+
+And by pull request status—such as merged, no PR, open, or declined
+
+Optionally, you can also pull in detailed PR Information for each branch.
+
+you can also get pr information for all the record . but its an api call it it increases the loading time. so i made this check box uncheced by default
+
+
+Next is Bulk Selection, which allows selecting multiple branches—either all or specific ones—for deletion.
+
+Once you’ve reviewed the list, you can use the Branch Deletion feature to remove them directly from the remote repository using the Git CLI—safely and easily.
+
+If you want the report.  you can export branch data to CSV, 

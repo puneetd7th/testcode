@@ -1,11 +1,17 @@
+so as we know that in our sentry and protal repo there are many  stale or merged branches over time which we are not using . 
+
+Manually identifying and cleaning them is time-consuming
+
 so I created this small utility to clean Bitbucket branches. its a java based desktop applicaton 
 
 Let me quickly walk you through what it does:
 
-[Switch to your application window and start showcasing features]
+this is the jar. and if you have java 21 as your class path it can run directly
 
 so first when you open this application you will see bitbucket login window
 it rquires your bitbucket credentials. which you can also change later 
+in future i wil try to use fid or token based authentication
+
 
 after login you need to enter your project url
 
@@ -39,3 +45,19 @@ Next is Bulk Selection, which allows selecting multiple branches—either all or
 Once you’ve reviewed the list, you can use the Branch Deletion feature to remove them directly from the remote repository using the Git CLI—safely and easily.
 
 If you want the report.  you can export branch data to CSV, 
+
+
+
+
+
+So, how does this help?
+
+It saves time by automating the cleanup of stale branches.
+
+It reduces clutter, keeping your repositories tidy and focused.
+
+It improves collaboration by ensuring that only relevant branches are visible, reducing confusion for your team.
+
+And finally, it supports auditing with CSV exports that track repository health.
+
+That’s Git Branch Cleaner—a simple, effective tool to make Git branch management easier.

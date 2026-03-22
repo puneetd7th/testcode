@@ -1,0 +1,81 @@
+Digital Signature Service – Integration Guide
+1. Overview
+
+The Digital Signature Service provides a secure, banking-grade signing and verification mechanism for applications that require:
+
+Transaction integrity
+Non-repudiation
+Two-factor authentication (2FA) for user verification
+
+This service allows client applications to:
+
+Initiate a signing request
+Authenticate users with password + token or token-only 2FA
+Sign payloads securely using server-side HSM-backed private keys
+Validate signatures
+Track the status of each signing request (INIT → SIGNED → USED)
+
+The service ensures high security by keeping private keys on HSMs and never exposing them to clients.
+
+2. Key Features
+Initialization
+Generates requestId and nonce per signing session.
+Associates request with a user session.
+2FA / Credential Verification
+Supports password + token or token-only authentication.
+Ensures that only authorized users can sign payloads.
+Server-Side Signing
+Payload hash includes a nonce to prevent replay attacks.
+Signatures are generated using private keys in an HSM / Key Service.
+Optionally, signature can be returned to client if needed.
+Validation
+Verifies payloads against stored signatures.
+Updates status to prevent replay of signed requests.
+Audit & Security
+Logs requestId, user ID, IP, timestamp, and status transitions.
+Handles errors such as expired nonce, failed signature, invalid session.
+3. How Client Applications Can Use This Service
+Step 1 – Initialize Signature Request
+Call POST /api/dsig/init with sessionId.
+Receive requestId and nonce.
+Render digital signature UI in the client application using the nonce.
+Step 2 – Authenticate User
+Call POST /api/dsig/verify with user credentials (password + token or token-only) and requestId.
+Receive status VERIFIED if authentication succeeds.
+Step 3 – Sign Payload
+Call POST /api/dsig/sign with requestId and payload.
+Server computes hash with nonce and generates signature in HSM.
+Status updated to SIGNED.
+Optional: client receives signature for downstream use.
+Step 4 – Validate Signature
+Call POST /api/dsig/validate with requestId and payload.
+Server verifies payload against stored signature.
+Status updated to USED.
+Response indicates VALID or INVALID.
+4. API Summary
+Step	Endpoint	Request	Response	Notes
+Init	/api/dsig/init	{ "sessionId": "string" }	{ "requestId": "string", "nonce": "string", "status": "INIT" }	Generates requestId & nonce
+Verify	/api/dsig/verify	{ "requestId": "string", "credentials": {...} }	{ "status": "VERIFIED" / "FAILED" }	Authenticate user via 2FA
+Sign	/api/dsig/sign	{ "requestId": "string", "payload": "string" }	{ "status": "SIGNED", "signature": "optional" }	Payload signed server-side
+Validate	/api/dsig/validate	{ "requestId": "string", "payload": "string" }	{ "status": "VALID" / "INVALID" }	Verify signed payload
+5. Security Considerations
+Private keys are never exposed to clients.
+Nonce ensures replay protection.
+Each request is bound to a specific session.
+Audit logging supports regulatory compliance.
+Error handling covers invalid sessions, signature failures, and expired nonces.
+6. Integration Benefits for Client Applications
+Secure Transaction Signing – Applications can trust that signed payloads are tamper-proof.
+Regulatory Compliance – Audit logs and secure key handling meet banking and financial regulations.
+Simplified Implementation – Clients only call APIs, without managing private keys or HSMs.
+Flexible Integration – Optional signature return allows integration with downstream systems.
+2FA Support – Enhances security for high-value transactions.
+7. Recommended Client Flow
+Application renders signature UI after initialization.
+User enters credentials for 2FA verification.
+Application calls sign API with payload.
+Optional: retrieve signature if needed.
+Before sending to downstream systems, optionally validate signature.
+Update application status / logs based on validation response.
+
+This document can be directly shared with client teams as a developer-ready guide for integrating digital signature functionality in their apps.

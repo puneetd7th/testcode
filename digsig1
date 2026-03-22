@@ -1,0 +1,69 @@
+@startuml
+actor ClientApp
+participant "Login-UI" as UI
+participant "Authentication Service" as Auth
+participant "Key Service" as KeyService
+participant RSA
+database DB
+
+
+'--------------------
+' Initialization Flow
+'--------------------
+ClientApp -> UI : init(sessionId)
+UI -> Auth : create request
+
+Auth -> Auth : generate requestId
+Auth -> Auth : generate nonce
+Auth -> DB : store request(requestId, nonce, sessionId) , status=INIT
+DB --> Auth : ok
+
+
+Auth -> UI : requestId, nonce
+UI -> ClientApp : render Digital Signature UI
+
+'--------------------
+' 2FA / Credential Verification
+'--------------------
+ClientApp -> UI : submit credentials (password + token OR token only)
+UI -> Auth : verify credentials
+Auth -> Auth : check session
+Auth -> Auth : authenticate user
+Auth -> RSA : validate token
+Auth --> UI : verified
+
+'--------------------
+' Signing Flow
+'--------------------
+ClientApp -> UI : sign(requestId, payload)
+UI -> Auth : sign request(requestId, payload)
+
+Auth -> DB : fetch request(requestId)
+DB --> Auth : requestData
+
+Auth -> Auth : include nonce in payload hash
+Auth -> KeyService : sign(payloadHash using Key)
+KeyService --> Auth : signature
+
+Auth -> DB : store signature, status=SIGNED
+DB --> Auth : ok
+
+' Note: Signature not returned to client
+
+'--------------------
+' Validation Flow
+'--------------------
+ClientApp -> UI : validate(requestId, payload)
+UI -> Auth : validate request(requestId, payload)
+
+Auth -> DB : fetch request(requestId)
+DB --> Auth : requestData
+
+Auth -> Auth : compute payload hash with nonce
+Auth -> Auth : verify signature against stored signature
+Auth -> DB : store signature, status=USED
+
+Auth -> UI : VALID / INVALID
+UI -> ClientApp : VALID / INVALID
+
+@enduml

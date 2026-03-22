@@ -1,0 +1,84 @@
+@startuml
+actor ClientApp
+participant "Login-UI" as UI
+participant "Authentication Service" as Auth
+participant "HSM / Key Service" as KeyService
+database DB
+
+'--------------------
+' Initialization Flow
+'--------------------
+ClientApp -> UI : init(sessionId)
+UI -> Auth : create request
+
+Auth -> Auth : generate requestId & nonce
+Auth -> DB : store request(requestId, nonce, sessionId, status=INIT)
+DB --> Auth : ok
+
+Auth -> UI : requestId, nonce
+UI -> ClientApp : render Digital Signature UI
+
+'--------------------
+' 2FA / Credential Verification
+'--------------------
+ClientApp -> UI : submit credentials (password + token OR token only)
+UI -> Auth : verify credentials
+Auth -> Auth : check session & authenticate user
+Auth -> KeyService : validate token
+KeyService --> Auth : token valid
+Auth --> UI : verified
+UI --> ClientApp : credentials verified
+
+'--------------------
+' Signing Flow
+'--------------------
+ClientApp -> UI : sign(requestId, payload)
+UI -> Auth : sign request(requestId, payload)
+
+Auth -> DB : fetch request(requestId)
+DB --> Auth : requestData
+
+Auth -> Auth : compute payloadHash including nonce
+Auth -> KeyService : sign(payloadHash with private key)
+KeyService --> Auth : signature
+
+Auth -> DB : store signature, status=SIGNED
+DB --> Auth : ok
+
+' Optional: return signature to client if integration requires
+Auth --> UI : signature (optional)
+UI --> ClientApp : signature (optional)
+
+'--------------------
+' Validation Flow
+'--------------------
+ClientApp -> UI : validate(requestId, payload)
+UI -> Auth : validate request(requestId, payload)
+
+Auth -> DB : fetch request(requestId)
+DB --> Auth : requestData
+
+Auth -> Auth : compute payloadHash with nonce
+Auth -> Auth : verify signature against stored signature
+alt signature valid
+    Auth -> DB : update status=USED
+    DB --> Auth : ok
+    Auth --> UI : VALID
+    UI --> ClientApp : VALID
+else signature invalid
+    Auth --> UI : INVALID
+    UI --> ClientApp : INVALID
+end
+
+'--------------------
+' Error / Failure Handling
+'--------------------
+note right of Auth
+  Handle:
+  - Nonce expired
+  - Signature failed
+  - Validation mismatch
+  - Session invalid
+end note
+
+@enduml

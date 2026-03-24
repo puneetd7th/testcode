@@ -19,7 +19,7 @@ Auth -> Auth : generate requestId & nonce
 Auth -> KeyService : get server public key (KMS-backed)
 Auth -> CryptoService : get password encryption public key
 
-' ✅ Strong Identity Binding (JWT)
+' strong Identity Binding (JWT)
 Auth -> Auth : create bindingToken (JWT)
 note right of Auth
   JWT :
@@ -45,10 +45,10 @@ note right of ClientApp
 
   Client computes SHA-256(payload)
 
-  ' ✅ Verify JWT using server public key
+  ' Verify JWT using server public key
   Client verifies bindingToken (JWT signature)
 
-  ✅ Ephemeral key binding included in signature
+  'ephemeral key binding included in signature
 
   Client signs using ephemeral private key:
     SHA-256(payload) + nonce + SHA-256(bindingToken) + requestId + ephemeralPublicKey
@@ -75,7 +75,7 @@ Auth -> Auth : decrypt encryptedPayload using AES key
 
 Auth -> Auth : extract payload, signature, ephemeral public key, encrypted password, bindingToken
 
-' ✅ Validate JWT (Identity Binding)
+' validate JWT (Identity Binding)
 Auth -> Auth : verify bindingToken signature using server public key
 Auth -> Auth : ensure bindingToken not expired
 Auth -> Auth : validate claims: sessionId, requestId, nonce, exp
@@ -84,10 +84,10 @@ Auth -> DB : match sessionId, requestId, nonce with DB
 
 Auth -> STS : validate sessionId (still active)
 
-' ✅ Expiry check (JWT + DB TTL)
+' Expiry check (JWT + DB TTL)
 Auth -> Auth : ensure bindingToken not expired
 
-' ✅ One-time usage enforcement
+' one-time usage enforcement
 Auth -> Auth : ensure status == INIT
 
 Auth -> Auth : validate nonce against DB (match & not expired/used)
@@ -97,7 +97,7 @@ alt nonce invalid
     UI --> ClientApp : INVALID_NONCE
 else nonce valid
 
-    ' ✅ MFA
+    'MFA
     Auth -> CryptoService : validate password
     Auth -> RSA : validate token (MFA)
     RSA --> Auth : credentials valid / invalid
@@ -107,7 +107,7 @@ else nonce valid
         UI --> ClientApp : INVALID_CREDENTIALS
     else credentials valid
 
-        ' ✅ Signature Validation (Generic + Bound JWT)
+        'Signature Validation (Generic + Bound JWT)
         Auth -> Auth : recompute SHA-256(payload)
         Auth -> Auth : recompute SHA-256(bindingToken)
         Auth -> Auth : verify signature using ephemeral public key

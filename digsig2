@@ -75,13 +75,14 @@ Auth -> Auth : decrypt encryptedPayload using AES key
 
 Auth -> Auth : extract payload, signature, ephemeral public key, encrypted password, bindingToken
 
-Auth -> STS : validate sessionId (still active)
-
 ' ✅ Validate JWT (Identity Binding)
 Auth -> Auth : verify bindingToken signature using server public key
+Auth -> Auth : ensure bindingToken not expired
 Auth -> Auth : validate claims: sessionId, requestId, nonce, exp
 
-Auth -> Auth : match sessionId, requestId, nonce with DB
+Auth -> DB : match sessionId, requestId, nonce with DB
+
+Auth -> STS : validate sessionId (still active)
 
 ' ✅ Expiry check (JWT + DB TTL)
 Auth -> Auth : ensure bindingToken not expired
@@ -108,6 +109,7 @@ else nonce valid
 
         ' ✅ Signature Validation (Generic + Bound JWT)
         Auth -> Auth : recompute SHA-256(payload)
+        Auth -> Auth : recompute SHA-256(bindingToken)
         Auth -> Auth : verify signature using ephemeral public key
         Auth -> Auth : ensure signed data includes: SHA-256(payload) + nonce + SHA-256(bindingToken) + requestId + ephemeralPublicKey
 

@@ -17,13 +17,13 @@ Auth -> Auth : generate requestId & nonce
 Auth -> KeyService : get server public key (KMS-backed)
 Auth -> CryptoService : get password encryption public key
 
-' ✅ Strong Identity Binding (Session Binding)
-Auth -> Auth : create sessionBinding = Sign(sessionId + requestId + nonce)
+' ✅ Strong Identity Binding (JWT)
+Auth -> Auth : create bindingToken (JWT: sessionId + requestId + nonce + exp, signed)
 
 Auth -> DB : store request(requestId, nonce, sessionId, status=INIT, createdAt)
 DB --> Auth : ok
 
-Auth --> UI : requestId, nonce, serverPublicKey, passwordPublicKey, sessionBinding
+Auth --> UI : requestId, nonce, serverPublicKey, passwordPublicKey, bindingToken
 UI --> ClientApp : render Digital Signature UI + js sign function
 
 ClientApp --> ClientApp : user enters credentials and clicks submit
@@ -39,12 +39,13 @@ note right of ClientApp
 
   Client computes SHA-256(payload)
 
-  Client verifies sessionBinding (server signature)
+  ' ✅ Verify JWT using server public key
+  Client verifies bindingToken (JWT signature)
 
   ✅ Ephemeral key binding included in signature
 
   Client signs using ephemeral private key:
-    SHA-256(payload) + nonce + sessionBinding + requestId + ephemeralPublicKey
+    SHA-256(payload) + nonce + bindingToken + requestId + ephemeralPublicKey
 
   Client encrypts password using passwordPublicKey
 
@@ -52,7 +53,7 @@ note right of ClientApp
 
   Client encrypts:
     payload + signature + ephemeral public key +
-    encrypted password + sessionBinding
+    encrypted password + bindingToken
 
   Client encrypts AES key with server public key (KMS-backed)
 end note
@@ -66,14 +67,16 @@ UI -> Auth : forward encryptedPayload + encryptedSymKey + requestId
 Auth -> KeyService : decrypt encryptedSymKey using KMS private key
 Auth -> Auth : decrypt encryptedPayload using AES key
 
-Auth -> Auth : extract payload, signature, ephemeral public key, encrypted password, sessionBinding
+Auth -> Auth : extract payload, signature, ephemeral public key, encrypted password, bindingToken
 
-' ✅ Validate session binding (Identity Binding)
-Auth -> Auth : verify sessionBinding using server public key
-Auth -> Auth : match sessionId inside binding
+' ✅ Validate JWT (Identity Binding)
+Auth -> Auth : verify bindingToken signature using server public key
+Auth -> Auth : validate claims: sessionId, requestId, nonce, exp
 
-' ✅ Expiry check
-Auth -> Auth : check requestId/nonce not expired (TTL)
+Auth -> Auth : match sessionId, requestId, nonce with DB
+
+' ✅ Expiry check (JWT + DB TTL)
+Auth -> Auth : ensure bindingToken not expired
 
 ' ✅ One-time usage enforcement
 Auth -> Auth : ensure status == INIT
@@ -95,10 +98,11 @@ else nonce valid
         UI --> ClientApp : INVALID_CREDENTIALS
     else credentials valid
 
-        ' ✅ Signature Validation (Generic + Bound Key)
+        ' ✅ Signature Validation (Generic + Bound JWT)
         Auth -> Auth : recompute SHA-256(payload)
         Auth -> Auth : verify signature using ephemeral public key
-        Auth -> Auth : ensure signed data includes: SHA-256(payload) + nonce + sessionBinding + requestId + ephemeralPublicKey
+        Auth -> Auth : ensure signed data includes: SHA-256(payload) + nonce + bindingToken + requestId + ephemeralPublicKey
+
         alt signature valid
             Auth -> DB : update status=SIGNED
             DB --> Auth : ok
@@ -118,8 +122,8 @@ note right of Auth
   Log:
     - requestId, sessionId, timestamp, userId
     - payload hash (NOT raw payload)
+    - JWT validation result
     - verification result
-    - expiry validation result
 
   Nonce prevents replay
   Status transitions: INIT -> SIGNED

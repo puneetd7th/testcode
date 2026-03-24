@@ -2,7 +2,9 @@
 actor ClientApp
 participant "Login-UI" as UI
 participant "Authentication Service" as Auth
-participant "HSM / Key Service" as KeyService
+participant "Key Service" as KeyService
+participant "Cryptography Service" as CryptoService
+participant "RSA / Token Validator" as RSA
 database DB
 
 '--------------------
@@ -10,75 +12,69 @@ database DB
 '--------------------
 ClientApp -> UI : init(sessionId)
 UI -> Auth : create request
-
 Auth -> Auth : generate requestId & nonce
+Auth -> KeyService : get server public key
+Auth -> CryptoService : get password encryption public key
 Auth -> DB : store request(requestId, nonce, sessionId, status=INIT)
 DB --> Auth : ok
+Auth --> UI : requestId, nonce, serverPublicKey, passwordPublicKey
+UI --> ClientApp : render Digital Signature UI + js sign function
 
-Auth -> UI : requestId, nonce
-UI -> ClientApp : render Digital Signature UI
-
-'--------------------
-' 2FA / Credential Verification
-'--------------------
-ClientApp -> UI : submit credentials (password + token OR token only)
-UI -> Auth : verify credentials
-Auth -> Auth : check session & authenticate user
-Auth -> KeyService : validate token
-KeyService --> Auth : token valid
-Auth --> UI : verified
-UI --> ClientApp : credentials verified
+ClientApp --> ClientApp : user enters credentials and clicks submit
+ClientApp --> ClientApp : js sign(payload, credentials) function executes
 
 '--------------------
-' Signing Flow
+' Client-Side Signing & Hybrid Encryption
 '--------------------
-ClientApp -> UI : sign(requestId, payload)
-UI -> Auth : sign request(requestId, payload)
-
-Auth -> DB : fetch request(requestId)
-DB --> Auth : requestData
-
-Auth -> Auth : compute payloadHash including nonce
-Auth -> KeyService : sign(payloadHash with private key)
-KeyService --> Auth : signature
-
-Auth -> DB : store signature, status=SIGNED
-DB --> Auth : ok
-
-' Optional: return signature to client if integration requires
-Auth --> UI : signature (optional)
-UI --> ClientApp : signature (optional)
+note right of ClientApp
+  Client generates ephemeral key pair per transaction
+  Client signs payload + nonce with ephemeral private key
+  Client encrypts password using passwordPublicKey (from Cryptography Service)
+  Client generates symmetric AES key
+  Client encrypts payload + signature + ephemeral public key + encrypted password using AES
+  Client encrypts AES key with server public key (from KeyService)
+end note
+ClientApp -> UI : send encryptedPayload + encryptedSymKey + requestId
+UI -> Auth : forward encryptedPayload + encryptedSymKey + requestId
 
 '--------------------
-' Validation Flow
+' Validation Flow (Nonce + Credential + Signature)
 '--------------------
-ClientApp -> UI : validate(requestId, payload)
-UI -> Auth : validate request(requestId, payload)
-
-Auth -> DB : fetch request(requestId)
-DB --> Auth : requestData
-
-Auth -> Auth : compute payloadHash with nonce
-Auth -> Auth : verify signature against stored signature
-alt signature valid
-    Auth -> DB : update status=USED
-    DB --> Auth : ok
-    Auth --> UI : VALID
-    UI --> ClientApp : VALID
-else signature invalid
-    Auth --> UI : INVALID
-    UI --> ClientApp : INVALID
+Auth -> KeyService : decrypt encryptedSymKey with server private key
+Auth -> Auth : decrypt encryptedPayload using AES key
+Auth -> Auth : extract payload, signature, ephemeral public key, encrypted password
+Auth -> Auth : validate nonce against DB (match & not expired/used)
+alt nonce invalid
+    Auth --> UI : INVALID_NONCE
+    UI --> ClientApp : INVALID_NONCE
+else nonce valid
+    Auth -> CryptoService : validate password
+    Auth -> RSA : validate token
+    RSA --> Auth : credentials valid / invalid
+    alt credentials invalid
+        Auth --> UI : INVALID_CREDENTIALS
+        UI --> ClientApp : INVALID_CREDENTIALS
+    else credentials valid
+        Auth -> Auth : verify signature using ephemeral public key
+        alt signature valid
+            Auth -> DB : update status=SIGNED
+            DB --> Auth : ok
+            Auth --> UI : VALID
+            UI --> ClientApp : VALID
+        else signature invalid
+            Auth --> UI : INVALID_SIGNATURE
+            UI --> ClientApp : INVALID_SIGNATURE
+        end
+    end
 end
 
 '--------------------
-' Error / Failure Handling
+' Audit & Logging
 '--------------------
 note right of Auth
-  Handle:
-  - Nonce expired
-  - Signature failed
-  - Validation mismatch
-  - Session invalid
+  Log requestId, sessionId, timestamp, userId, verification result
+  Nonce prevents replay
+  Status transitions: INIT -> SIGNED -> USED
 end note
 
 @enduml

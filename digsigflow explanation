@@ -1,3 +1,35 @@
+**Digital Signature Flow – Banking Grade Design**
+
+We’ve designed a secure, generic digital signing framework that ensures strong identity binding, payload integrity, and replay protection.
+
+At a high level, the flow starts with an authenticated session. During the init call, we validate the session via the Session Service and generate a requestId and nonce. We then issue a short-lived, server-signed JWT—our binding token—which cryptographically ties together the sessionId, requestId, and nonce.
+
+On the client side, using WebCrypto, we generate an ephemeral key pair per transaction. The client verifies the JWT to ensure the request context is trusted, then signs a hash of the payload along with the nonce, requestId, the hash of the JWT, and the ephemeral public key. This ensures the payload, identity, and request context are tightly bound and cannot be altered or reused.
+
+The entire payload, including credentials and signature, is encrypted using a hybrid encryption model—AES for data and an AWS KMS-backed key for secure key exchange.
+
+On the server side, we first decrypt the payload, then validate the JWT signature and claims, and match them against database state. We revalidate the session to handle expiry scenarios, enforce nonce and request state to prevent replay, and then verify the signature using the ephemeral public key.
+
+We also enforce MFA using password and token validation.
+
+Finally, we persist the result and maintain a full audit trail with requestId, sessionId, payload hash, and verification outcome.
+
+This design ensures:
+
+* Strong identity binding via JWT
+* End-to-end payload integrity via digital signatures
+* Replay protection via nonce, expiry, and state control
+* Hardware-backed key security using AWS KMS
+* And full auditability for compliance
+
+Overall, this is a reusable, banking-grade digital signature solution that can securely sign any payload, not just payments.
+
+
+
+
+
+
+
 1. What “Binding” Means (Simple Definition)
 
 Binding = cryptographically tying identity + request + payload together so nothing can be swapped, replayed, or reused.

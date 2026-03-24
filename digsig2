@@ -51,7 +51,7 @@ note right of ClientApp
   ✅ Ephemeral key binding included in signature
 
   Client signs using ephemeral private key:
-    SHA-256(payload) + nonce + bindingToken + requestId + ephemeralPublicKey
+    SHA-256(payload) + nonce + SHA-256(bindingToken) + requestId + ephemeralPublicKey
 
   Client encrypts password using passwordPublicKey
 
@@ -74,6 +74,8 @@ Auth -> KeyService : decrypt encryptedSymKey using KMS private key
 Auth -> Auth : decrypt encryptedPayload using AES key
 
 Auth -> Auth : extract payload, signature, ephemeral public key, encrypted password, bindingToken
+
+Auth -> STS : validate sessionId (still active)
 
 ' ✅ Validate JWT (Identity Binding)
 Auth -> Auth : verify bindingToken signature using server public key
@@ -107,7 +109,7 @@ else nonce valid
         ' ✅ Signature Validation (Generic + Bound JWT)
         Auth -> Auth : recompute SHA-256(payload)
         Auth -> Auth : verify signature using ephemeral public key
-        Auth -> Auth : ensure signed data includes: SHA-256(payload) + nonce + bindingToken + requestId + ephemeralPublicKey
+        Auth -> Auth : ensure signed data includes: SHA-256(payload) + nonce + SHA-256(bindingToken) + requestId + ephemeralPublicKey
 
         alt signature valid
             Auth -> DB : update status=SIGNED

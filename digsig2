@@ -2,7 +2,7 @@
 actor ClientApp
 participant "Login-UI" as UI
 participant "Authentication Service" as Auth
-participant "Key Service" as KeyService
+participant "Key Service (AWS KMS)" as KeyService
 participant "Cryptography Service" as CryptoService
 participant "RSA / Token Validator" as RSA
 database DB
@@ -12,12 +12,18 @@ database DB
 '--------------------
 ClientApp -> UI : init(sessionId)
 UI -> Auth : create request
+
 Auth -> Auth : generate requestId & nonce
-Auth -> KeyService : get server public key
+Auth -> KeyService : get server public key (KMS-backed)
 Auth -> CryptoService : get password encryption public key
-Auth -> DB : store request(requestId, nonce, sessionId, status=INIT)
+
+' ✅ Strong Identity Binding (Session Binding)
+Auth -> Auth : create sessionBinding = Sign(sessionId + requestId + nonce)
+
+Auth -> DB : store request(requestId, nonce, sessionId, status=INIT, createdAt)
 DB --> Auth : ok
-Auth --> UI : requestId, nonce, serverPublicKey, passwordPublicKey
+
+Auth --> UI : requestId, nonce, serverPublicKey, passwordPublicKey, sessionBinding
 UI --> ClientApp : render Digital Signature UI + js sign function
 
 ClientApp --> ClientApp : user enters credentials and clicks submit
@@ -27,35 +33,72 @@ ClientApp --> ClientApp : js sign(payload, credentials) function executes
 ' Client-Side Signing & Hybrid Encryption
 '--------------------
 note right of ClientApp
+  Uses WebCrypto (non-exportable keys)
+
   Client generates ephemeral key pair per transaction
-  Client signs payload + nonce with ephemeral private key
-  Client encrypts password using passwordPublicKey (from Cryptography Service)
+
+  Client computes SHA-256(payload)
+
+  Client verifies sessionBinding (server signature)
+
+  ✅ Ephemeral key binding included in signature
+
+  Client signs using ephemeral private key:
+    SHA-256(payload) + nonce + sessionBinding + requestId + ephemeralPublicKey
+
+  Client encrypts password using passwordPublicKey
+
   Client generates symmetric AES key
-  Client encrypts payload + signature + ephemeral public key + encrypted password using AES
-  Client encrypts AES key with server public key (from KeyService)
+
+  Client encrypts:
+    payload + signature + ephemeral public key +
+    encrypted password + sessionBinding
+
+  Client encrypts AES key with server public key (KMS-backed)
 end note
+
 ClientApp -> UI : send encryptedPayload + encryptedSymKey + requestId
 UI -> Auth : forward encryptedPayload + encryptedSymKey + requestId
 
 '--------------------
-' Validation Flow (Nonce + Credential + Signature)
+' Validation Flow
 '--------------------
-Auth -> KeyService : decrypt encryptedSymKey with server private key
+Auth -> KeyService : decrypt encryptedSymKey using KMS private key
 Auth -> Auth : decrypt encryptedPayload using AES key
-Auth -> Auth : extract payload, signature, ephemeral public key, encrypted password
+
+Auth -> Auth : extract payload, signature, ephemeral public key, encrypted password, sessionBinding
+
+' ✅ Validate session binding (Identity Binding)
+Auth -> Auth : verify sessionBinding using server public key
+Auth -> Auth : match sessionId inside binding
+
+' ✅ Expiry check
+Auth -> Auth : check requestId/nonce not expired (TTL)
+
+' ✅ One-time usage enforcement
+Auth -> Auth : ensure status == INIT
+
 Auth -> Auth : validate nonce against DB (match & not expired/used)
+
 alt nonce invalid
     Auth --> UI : INVALID_NONCE
     UI --> ClientApp : INVALID_NONCE
 else nonce valid
+
+    ' ✅ MFA
     Auth -> CryptoService : validate password
-    Auth -> RSA : validate token
+    Auth -> RSA : validate token (MFA)
     RSA --> Auth : credentials valid / invalid
+
     alt credentials invalid
         Auth --> UI : INVALID_CREDENTIALS
         UI --> ClientApp : INVALID_CREDENTIALS
     else credentials valid
+
+        ' ✅ Signature Validation (Generic + Bound Key)
+        Auth -> Auth : recompute SHA-256(payload)
         Auth -> Auth : verify signature using ephemeral public key
+        Auth -> Auth : ensure signed data includes: SHA-256(payload) + nonce + sessionBinding + requestId + ephemeralPublicKey
         alt signature valid
             Auth -> DB : update status=SIGNED
             DB --> Auth : ok
@@ -72,9 +115,14 @@ end
 ' Audit & Logging
 '--------------------
 note right of Auth
-  Log requestId, sessionId, timestamp, userId, verification result
+  Log:
+    - requestId, sessionId, timestamp, userId
+    - payload hash (NOT raw payload)
+    - verification result
+    - expiry validation result
+
   Nonce prevents replay
-  Status transitions: INIT -> SIGNED -> USED
+  Status transitions: INIT -> SIGNED
 end note
 
 @enduml

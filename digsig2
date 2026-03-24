@@ -4,6 +4,7 @@ participant "Login-UI" as UI
 participant "Authentication Service" as Auth
 participant "Key Service (AWS KMS)" as KeyService
 participant "Cryptography Service" as CryptoService
+participant "Session-Service" as STS
 participant "RSA / Token Validator" as RSA
 database DB
 
@@ -13,12 +14,17 @@ database DB
 ClientApp -> UI : init(sessionId)
 UI -> Auth : create request
 
+Auth -> STS : validate sessionId (active, authenticated, not expired)
 Auth -> Auth : generate requestId & nonce
 Auth -> KeyService : get server public key (KMS-backed)
 Auth -> CryptoService : get password encryption public key
 
 ' ✅ Strong Identity Binding (JWT)
-Auth -> Auth : create bindingToken (JWT: sessionId + requestId + nonce + exp, signed)
+Auth -> Auth : create bindingToken (JWT)
+note right of Auth
+  JWT :
+  sessionId + requestId + nonce + exp, signed
+end note
 
 Auth -> DB : store request(requestId, nonce, sessionId, status=INIT, createdAt)
 DB --> Auth : ok

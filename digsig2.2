@@ -1,0 +1,150 @@
+@startuml
+actor ClientApp
+participant "Login-UI" as UI
+participant "Authentication Service" as Auth
+participant "Key Service (AWS KMS)" as KeyService
+participant "Cryptography Service" as CryptoService
+participant "Session-Service" as STS
+participant "RSA / Token Validator" as RSA
+database DB
+
+'--------------------
+' Initialization Flow
+'--------------------
+ClientApp -> UI : init(sessionId)
+UI -> Auth : create request
+
+Auth -> STS : validate sessionId (active, authenticated, not expired)
+
+' ✅ Determine authType on server
+Auth -> Auth : determine authType (user policy / risk based)
+
+Auth -> Auth : generate requestId & nonce
+Auth -> KeyService : get server public key (KMS-backed)
+Auth -> CryptoService : get password encryption public key
+
+' ✅ Strong Identity Binding (JWT with authType)
+Auth -> Auth : create bindingToken (JWT)
+note right of Auth
+  JWT :
+  sessionId + requestId + nonce + authType + exp, signed
+end note
+
+Auth -> DB : store request(requestId, nonce, sessionId, status=INIT, createdAt)
+DB --> Auth : ok
+
+Auth --> UI : requestId, nonce, serverPublicKey, passwordPublicKey, bindingToken
+
+' ✅ UI adapts based on authType
+UI --> ClientApp : render UI based on authType (password / token / MFA)
+
+ClientApp --> ClientApp : user enters credentials and clicks submit
+ClientApp --> ClientApp : js sign(payload, credentials) function executes
+
+'--------------------
+' Client-Side Signing & Hybrid Encryption
+'--------------------
+note right of ClientApp
+  Uses WebCrypto (non-exportable keys)
+
+  Client generates ephemeral key pair per transaction
+
+  Client computes SHA-256(payload)
+
+  ' Verify JWT using server public key
+  Client verifies bindingToken (JWT signature)
+
+  ' Ephemeral key binding included in signature
+  Client signs using ephemeral private key:
+    SHA-256(payload) + nonce + SHA-256(bindingToken) + requestId + ephemeralPublicKey
+
+  Client encrypts password using passwordPublicKey
+
+  Client generates symmetric AES key
+
+  Client encrypts:
+    payload + signature + ephemeral public key +
+    encrypted password + bindingToken
+
+  Client encrypts AES key with server public key (KMS-backed)
+end note
+
+ClientApp -> UI : send encryptedPayload + encryptedSymKey + requestId
+UI -> Auth : forward encryptedPayload + encryptedSymKey + requestId
+
+'--------------------
+' Validation Flow
+'--------------------
+Auth -> KeyService : decrypt encryptedSymKey using KMS private key
+Auth -> Auth : decrypt encryptedPayload using AES key
+
+Auth -> Auth : extract payload, signature, ephemeral public key, encrypted password, bindingToken
+
+' ✅ Validate JWT (Identity Binding + authType)
+Auth -> Auth : verify bindingToken signature using server public key
+Auth -> Auth : ensure bindingToken not expired
+Auth -> Auth : extract sessionId, requestId, nonce, authType from JWT
+
+Auth -> DB : match sessionId, requestId, nonce with DB
+
+Auth -> STS : validate sessionId (still active)
+
+' Expiry check (JWT + DB TTL)
+Auth -> Auth : ensure bindingToken not expired
+
+' one-time usage enforcement
+Auth -> Auth : ensure status == INIT
+
+Auth -> Auth : validate nonce against DB (match & not expired/used)
+
+alt nonce invalid
+    Auth --> UI : INVALID_NONCE
+    UI --> ClientApp : INVALID_NONCE
+else nonce valid
+
+    ' ✅ Enforce authType from JWT
+    Auth -> Auth : validate credentials based on authType
+
+    Auth -> CryptoService : validate password (if required)
+    Auth -> RSA : validate token (if required)
+    RSA --> Auth : credentials valid / invalid
+
+    alt credentials invalid
+        Auth --> UI : INVALID_CREDENTIALS
+        UI --> ClientApp : INVALID_CREDENTIALS
+    else credentials valid
+
+        ' Signature Validation (Generic + Bound JWT)
+        Auth -> Auth : recompute SHA-256(payload)
+        Auth -> Auth : recompute SHA-256(bindingToken)
+        Auth -> Auth : verify signature using ephemeral public key
+        Auth -> Auth : ensure signed data includes: SHA-256(payload) + nonce + SHA-256(bindingToken) + requestId + ephemeralPublicKey
+
+        alt signature valid
+            Auth -> DB : update status=SIGNED
+            DB --> Auth : ok
+            Auth --> UI : VALID
+            UI --> ClientApp : VALID
+        else signature invalid
+            Auth --> UI : INVALID_SIGNATURE
+            UI --> ClientApp : INVALID_SIGNATURE
+        end
+    end
+end
+
+'--------------------
+' Audit & Logging
+'--------------------
+note right of Auth
+  Log:
+    - requestId, sessionId, timestamp, userId
+    - payload hash (NOT raw payload)
+    - JWT validation result
+    - verification result
+    - authType used
+
+  Nonce prevents replay
+  Status transitions: INIT -> SIGNED
+end note
+
+@enduml

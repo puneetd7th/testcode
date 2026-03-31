@@ -1,0 +1,264 @@
+Why we built this)
+
+“Today I’ll walk you through our secure, banking-grade digital signature flow.
+
+The core problem we’re solving is:
+
+How do we ensure that a transaction is genuinely initiated by the user
+While also guaranteeing:
+No tampering
+No replay
+Strong authentication binding
+And end-to-end cryptographic integrity
+
+Traditional approaches rely heavily on server-side trust or static credentials.
+Our design shifts this to a cryptographically verifiable, per-transaction trust model.”
+
+🧠 High-Level Approach
+
+“What we’ve implemented is:
+
+Per-transaction signing (not session-based trust)
+Strong identity binding using JWT
+Client-side cryptography using WebCrypto
+Hybrid encryption for confidentiality
+Replay protection using nonce + request state
+
+So every transaction becomes:
+👉 individually authenticated, signed, and verifiable”
+
+🔁 Step 1: Initialization Flow
+
+“Let’s start with the initialization phase.”
+
+What happens:
+Client sends:
+payload
+userId
+sessionId
+Server:
+Validates session via Session Service
+Determines authType dynamically (risk-based / policy-based)
+
+👉 This is important:
+
+Authentication is not static — it adapts (password / token / MFA)
+
+Then we generate security primitives:
+requestId → uniquely identifies transaction
+nonce → prevents replay
+Public keys:
+Server key (from KMS)
+Password encryption key
+🔐 Binding Token (Critical Design)
+
+“We create a bindingToken (JWT) which contains:
+
+sessionId
+requestId
+userId
+nonce
+authType
+expiry
+
+And it is signed by the server.”
+
+👉 Why this matters:
+
+Prevents context tampering
+Binds:
+identity
+session
+transaction
+authentication method
+
+This is the anchor of trust in the entire system.
+
+DB State
+
+“We store:
+
+requestId
+nonce
+payload hash (not raw payload)
+sessionId
+status = INIT”
+
+👉 This enables:
+
+replay protection
+integrity validation
+auditability
+💻 Step 2: Client-Side Signing & Encryption
+
+“This is where our design becomes significantly stronger than traditional systems.”
+
+On the client:
+Uses WebCrypto (non-exportable keys)
+Generates ephemeral key pair per transaction
+
+👉 This is critical:
+
+Even if one transaction is compromised, others are safe.
+
+What the client signs:
+
+It signs:
+
+payload hash
+nonce
+bindingToken hash
+requestId
+ephemeral public key
+
+👉 This ensures:
+
+Transaction cannot be reused
+Signature cannot be replayed
+Context cannot be altered
+Encryption layers:
+Password → encrypted with password public key
+Payload bundle → encrypted using AES
+AES key → encrypted using server KMS public key
+
+👉 This gives:
+
+Confidentiality (AES)
+Secure key exchange (KMS)
+Credential protection
+🔍 Step 3: Validation Flow (Server Side)
+
+“Now the server performs layered validation.”
+
+✅ Step 1: Decryption
+AES key decrypted via KMS
+Payload decrypted
+✅ Step 2: JWT Validation
+Verify signature
+Check expiry
+Extract:
+sessionId
+requestId
+nonce
+authType
+
+👉 Ensures:
+
+Request context is authentic and untampered
+
+✅ Step 3: Replay Protection
+Match requestId + nonce with DB
+Validate session again
+Ensure status = INIT
+
+👉 Guarantees:
+
+One-time usage
+No replay attacks
+✅ Step 4: Payload Integrity
+Recompute hash
+Compare with stored hash
+
+👉 Ensures:
+
+Payload was not modified after initialization
+
+✅ Step 5: Authentication (Before Signature Validation)
+
+“This is a key design decision.”
+
+We validate credentials first:
+
+Password via Crypto Service
+Token via RSA validator
+
+👉 Why this order?
+
+We ensure user identity is verified before trusting signature
+
+✅ Step 6: Signature Validation
+
+Now we verify:
+
+Signature using ephemeral public key
+Ensure signed data includes:
+payload hash
+nonce
+bindingToken hash
+requestId
+ephemeral public key
+
+👉 Guarantees:
+
+User actually signed this transaction
+Signature is bound to:
+this session
+this request
+this payload
+📊 State Transitions
+INIT → SIGNED (success)
+INIT → USED (failure / replay / invalid attempt)
+
+👉 Prevents:
+
+reuse
+double execution
+🧾 Audit & Logging
+
+“We log only what is necessary and safe:”
+
+requestId, sessionId, userId
+payload hash (not raw payload)
+authType
+verification result
+
+👉 This ensures:
+
+audit compliance
+no sensitive data leakage
+🛡️ Security Guarantees (This is where you impress architects)
+
+“This design provides:”
+
+1. End-to-End Integrity
+Payload hash validated at both ends
+2. Strong Identity Binding
+JWT ties user + session + request + authType
+3. Replay Protection
+Nonce + DB state + one-time usage
+4. Forward Security
+Ephemeral keys per transaction
+5. Tamper Resistance
+Signature includes full transaction context
+6. Credential Protection
+Password never sent in plaintext
+7. Zero Trust Between Steps
+Every layer re-validates independently
+🚀 Why This Is Better Than Traditional Approaches
+
+“Compared to typical systems:”
+
+Traditional	Our Approach
+Session-based trust	Transaction-level trust
+Static keys	Ephemeral keys
+Weak replay protection	Strong nonce + state enforcement
+Credentials-only auth	Auth + cryptographic signature
+Server-side signing	Client-side signing
+🎯 Closing
+
+“To summarize:
+
+We’ve designed a system where:
+
+👉 Every transaction is:
+
+Authenticated
+Signed
+Encrypted
+Verified
+Audited
+
+Independently.
+
+This moves us from trusting sessions
+to trusting cryptographic proof per transaction, which is essential for banking-grade security.”
